@@ -1,0 +1,30 @@
+[project]
+name = "bom-matrix"
+version = "1.0.0"
+description = "Open-source high-performance engine for parsing, normalizing, and diffusing Bills of Materials (BOM)"
+authors = [{name = "AARVAK-VSET", email = "aarvak.vset@gmail.com"}]
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.8"
+dependencies = [
+    "openpyxl",
+    "chardet",
+    "pint",
+    "psycopg2-binary",
+    "requests"
+]
+
+[project.optional-dependencies]
+mcp = ["mcp"]
+
+[project.scripts]
+bom-matrix = "bomkit.cli:main"
+teamcenter-mcp = "bomkit.mcp.teamcenter_server:main"
+
+[project.urls]
+"Homepage" = "https://github.com/AARVAK-VSET/bom-matrix"
+"Documentation" = "https://github.com/AARVAK-VSET/bom-matrix#readme"
+"Bug Tracker" = "https://github.com/AARVAK-VSET/bom-matrix/issues"
+
+[tool.setuptools.packages.find]
+include = ["bomkit*"]
