@@ -124,6 +124,8 @@ class LexicalSimilarity:
 
     def calculate_similarity(self, s1: str, s2: str) -> float:
         """Combined similarity for short labels and token overlap."""
+        if len(s1) + len(s2) == 0:
+            return 1.0
         jw = self.jaro_winkler_similarity(s1, s2)
         jaccard = self.jaccard_similarity(s1, s2)
         cosine = self.cosine_similarity(s1, s2)
