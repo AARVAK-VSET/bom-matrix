@@ -44,3 +44,25 @@ def test_normalization_of_bom_4():
     assert first["quantity"] == "3"
     assert first["value"] == "10n"
     assert first["package"]
+
+
+def test_obfuscated_header_row_is_not_leaked_as_data(tmp_path):
+    """A cryptic header row (e.g. Column1,Column2,Column3) must be used as
+    the header rather than leaking into the data rows."""
+    csv_file = tmp_path / "obfuscated.csv"
+    values = [
+        "STM32F401RCT6", "STM32F103C8T6", "ATmega328P", "ESP32-WROOM-32",
+        "RC0603FR-0710KL", "LM358", "1N4148", "2N3904", "MAX232", "74LS138",
+    ]
+    with open(csv_file, "w", newline="") as f:
+        f.write("Column1,Column2,Column3\n")
+        for i, value in enumerate(values):
+            f.write(f"{value},{i + 1},R{i + 1}\n")
+
+    parser = BomParser(normalize=True)
+    parser.register_adapter(CsvAdapter())
+
+    rows = parser.parse(str(csv_file))
+    assert len(rows) == 10
+    assert all(row["manufacturer_part_number"] in values for row in rows)
+    assert all(str(row["reference_designator"]).startswith("R") for row in rows)
