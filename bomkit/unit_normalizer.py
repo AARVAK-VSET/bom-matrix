@@ -40,6 +40,33 @@ class UnitNormalizer:
         """Initialize the unit normalizer."""
         self.ureg = ureg
     
+    @staticmethod
+    def _replace_decimal_comma(value_str: str) -> str:
+        """Replace a European decimal comma with a period when unambiguous.
+
+        Only a single comma flanked by digits is treated as a decimal
+        separator. Strings with an existing period, with multiple commas
+        (e.g. comma-separated lists) or with punctuational commas are left
+        untouched, since a numeric token only has one decimal separator.
+        The trailing unit suffix is preserved.
+
+        Note: a single unspaced comma between digits is interpreted as a
+        decimal separator (e.g. '4,700' -> '4.7'), so US-style thousands
+        separators are read as European decimals.
+        """
+        if ',' not in value_str:
+            return value_str
+        if value_str.count(',') != 1:
+            return value_str
+        if '.' in value_str:
+            return value_str
+        idx = value_str.index(',')
+        if idx == 0 or idx == len(value_str) - 1:
+            return value_str
+        if value_str[idx - 1].isdigit() and value_str[idx + 1].isdigit():
+            return value_str[:idx] + '.' + value_str[idx + 1:]
+        return value_str
+    
     def normalize_element(self, value: Any) -> Tuple[Any, Optional[str], Optional[str]]:
         """Normalize a single element (value with optional unit) to SI base units.
         
@@ -67,6 +94,10 @@ class UnitNormalizer:
         
         if not value_str:
             return value, None, None
+        
+        # Support European decimal comma notation (e.g. '4,7k' -> '4.7k')
+        # before numeric parsing and pattern matching.
+        value_str = self._replace_decimal_comma(value_str)
         
         # Try to parse as a number first (no unit)
         try:
