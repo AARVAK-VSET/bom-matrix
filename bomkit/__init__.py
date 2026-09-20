@@ -12,6 +12,7 @@ from .compliance import (
     evaluate_compliance,
     generate_compliance_delta_events,
 )
+from .confidence import ConfidenceScorer, build_confidence_report, classify_component
 
 __all__ = [
     "BomParser",
@@ -30,4 +31,7 @@ __all__ = [
     "ComplianceResult",
     "evaluate_compliance",
     "generate_compliance_delta_events",
+    "ConfidenceScorer",
+    "build_confidence_report",
+    "classify_component",
 ]
