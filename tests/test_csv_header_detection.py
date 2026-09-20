@@ -44,3 +44,30 @@ def test_normalization_of_bom_4():
     assert first["quantity"] == "3"
     assert first["value"] == "10n"
     assert first["package"]
+    
+
+def test_consecutive_blank_rows_are_skipped():
+    """Ensure consecutive blank rows in a CSV do not cause parsing errors."""
+    test_dir = Path(__file__).parent
+    csv_file = test_dir / "blank_rows.csv"
+
+    csv_file.write_text(
+        "Part Number,Quantity,Description\n"
+        "R1,10,Resistor\n"
+        "\n"
+        "\n"
+        "C1,5,Capacitor\n",
+        encoding="utf-8",
+    )
+
+    try:
+        parser = BomParser(normalize=False)
+        parser.register_adapter(CsvAdapter())
+
+        rows = parser.parse(str(csv_file))
+
+        assert len(rows) == 2
+        assert rows[0]["Part Number"] == "R1"
+        assert rows[1]["Part Number"] == "C1"
+    finally:
+        csv_file.unlink(missing_ok=True)
