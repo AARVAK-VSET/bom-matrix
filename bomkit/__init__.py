@@ -4,6 +4,13 @@ from .unit_normalizer import UnitNormalizer
 from .column_profiler import ColumnProfiler
 from .lexical_similarity import LexicalSimilarity, should_use_lexical_similarity
 from .schema import STANDARD_HEADERS, COLUMN_MAPPINGS
+from .compliance import (
+    ComplianceStatus,
+    ComplianceViolation,
+    ComplianceResult,
+    evaluate_compliance,
+    generate_compliance_delta_events,
+)
 
 __all__ = [
     "BomParser",
@@ -14,4 +21,9 @@ __all__ = [
     "should_use_lexical_similarity",
     "STANDARD_HEADERS",
     "COLUMN_MAPPINGS",
+    "ComplianceStatus",
+    "ComplianceViolation",
+    "ComplianceResult",
+    "evaluate_compliance",
+    "generate_compliance_delta_events",
 ]
