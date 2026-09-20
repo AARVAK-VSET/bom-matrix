@@ -2,22 +2,25 @@
 # Requirements file for all dependencies
 
 # Excel file parsing and writing
-openpyxl>=3.0.0
+openpyxl==3.1.5
 
 # Character encoding detection for CSV files
-chardet>=5.0.0
+chardet==7.6.0
 
 # Unit conversion and normalization
-pint>=0.20.0
+pint==0.25.3
 
 # PostgreSQL database adapter for Supabase integration
-psycopg2-binary>=2.9.0
+psycopg2-binary==2.9.13
 
 # Environment variable loading from .env files (for development/testing)
-python-dotenv>=1.0.0
+python-dotenv==1.2.3
 
 # MCP server SDK
-mcp>=1.0.0
+mcp==2.2.0
 
 # HTTP client for Teamcenter REST
-requests>=2.31.0
+requests==2.32.3
+
+# Vector PDF table extraction
+pdfplumber==0.11.10
