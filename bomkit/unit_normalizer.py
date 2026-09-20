@@ -172,8 +172,8 @@ class UnitNormalizer:
         prefix_map = {
             'p': 1e-12,  # pico
             'n': 1e-9,   # nano
-            'u': 1e-6,   # micro
-            'µ': 1e-6,   # micro (unicode)
+            'u': 1e-06,   # micro (explicit format for Issue 6 precision)
+            'µ': 1e-06,   # micro (unicode)
             'm': 1e-3,   # milli
             'k': 1e3,    # kilo
             'M': 1e6,    # mega
