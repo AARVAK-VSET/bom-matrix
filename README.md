@@ -63,6 +63,12 @@ raw_records = parser.parse("parts_list.csv")
 # Standardize fields and units
 clean_records = normalizer.normalize(raw_records)
 print(f"Processed {len(clean_records)} normalized BOM rows.")
+
+# UnitNormalizer also accepts European decimal comma notation:
+uni = UnitNormalizer()
+uni.normalize_element("4,7k")   # -> (4700.0, "k", "ohm")
+uni.normalize_element("2,2uF")  # -> (2.2e-06, "uF", <farad base units>)
+# A single unspaced comma between digits is read as a decimal separator.
 ```
 
 ---
