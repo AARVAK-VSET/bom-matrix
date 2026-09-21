@@ -41,7 +41,7 @@ class CsvAdapter:
                 # Normalize common encodings
                 encoding_lower = encoding.lower()
                 if 'utf-8' in encoding_lower or 'utf8' in encoding_lower:
-                    return 'utf-8'
+                    return 'utf-8-sig'
 
                 return encoding
         except Exception:

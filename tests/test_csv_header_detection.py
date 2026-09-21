@@ -45,6 +45,19 @@ def test_normalization_of_bom_4():
     assert first["value"] == "10n"
     assert first["package"]
 
+def test_utf8_encoding_uses_sig(tmp_path):
+    """Ensure UTF-8 CSV files use BOM-safe UTF-8 decoding."""
+    csv_file = tmp_path / "test_utf8_encoding.csv"
+
+    csv_file.write_text(
+        "Item,Quantity\nCafé,2\n",
+        encoding="utf-8"
+    )
+
+    adapter = CsvAdapter()
+
+    assert adapter._detect_encoding(str(csv_file)) == "utf-8-sig"
+    
 
 def test_obfuscated_header_row_is_not_leaked_as_data(tmp_path):
     """A cryptic header row (e.g. Column1,Column2,Column3) must be used as
