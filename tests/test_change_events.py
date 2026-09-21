@@ -738,6 +738,27 @@ class TestSerialization:
         assert result_dict["total_changes"] == 1
         assert len(result_dict["events"]) == 1
 
+def test_case_insensitive_part_number_matching():
+    item_a = SnapshotItemState(
+        bom_item_id=uuid4(),
+        quantity=1,
+        attributes={"manufacturer_part_number": "STM32F401"},
+        checksum="old",
+    )
+
+    item_b = SnapshotItemState(
+        bom_item_id=uuid4(),
+        quantity=1,
+        attributes={"manufacturer_part_number": "stm32f401"},
+        checksum="new",
+    )
+
+    changes = diff_snapshot_item(item_a, item_b)
+
+    assert len(changes) == 1
+    assert changes[0].type == "ATTRIBUTE_CHANGED"
+    assert changes[0].field == "manufacturer_part_number"
+
 def test_reference_designator_reordering_is_ignored():
     item_id = uuid4()
 
