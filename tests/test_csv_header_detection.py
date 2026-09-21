@@ -44,3 +44,33 @@ def test_normalization_of_bom_4():
     assert first["quantity"] == "3"
     assert first["value"] == "10n"
     assert first["package"]
+
+def test_excel_adapter_detects_bom_sheet():
+    """Ensure Excel adapter selects the BOM sheet instead of the active sheet."""
+    from bomkit.adapters.excel_adapter import ExcelAdapter
+    import openpyxl
+
+    test_file = Path(__file__).parent / "multi_sheet_bom.xlsx"
+
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "Instructions"
+
+    ws1.append(["This is not a BOM"])
+    ws1.append(["Some notes"])
+
+    ws2 = wb.create_sheet("BOM")
+    ws2.append(["Part Number", "Quantity", "Value"])
+    ws2.append(["R1", 2, "10k"])
+
+    wb.save(test_file)
+
+    try:
+        rows = ExcelAdapter().read(str(test_file))
+
+        assert rows
+        assert rows[0]["Part Number"] == "R1"
+        assert rows[0]["Quantity"] == 2
+        assert rows[0]["Value"] == "10k"
+    finally:
+        test_file.unlink(missing_ok=True)
