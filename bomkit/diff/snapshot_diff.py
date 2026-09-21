@@ -191,6 +191,17 @@ def fetch_snapshot_state(
     
     return state
 
+def _normalize_refdes_for_comparison(value: Any) -> Any:
+    """Normalize reference designators for order-insensitive comparison."""
+    if not isinstance(value, str):
+        return value
+
+    return {
+        token.strip()
+        for token in value.split(",")
+        if token.strip()
+    }
+
 
 def diff_snapshot_item(
     a: SnapshotItemState,
@@ -234,7 +245,11 @@ def diff_snapshot_item(
     for key in all_keys:
         val_a = attrs_a.get(key)
         val_b = attrs_b.get(key)
-        
+
+        if key in {"reference_designator", "refdes", "designator"}:
+            val_a = _normalize_refdes_for_comparison(val_a)
+            val_b = _normalize_refdes_for_comparison(val_b)
+
         if val_a != val_b:
             if key not in attrs_a:
                 # Attribute was added
