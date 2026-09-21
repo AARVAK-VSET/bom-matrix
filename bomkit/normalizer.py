@@ -305,6 +305,19 @@ class BomNormalizer:
             if any(key in col_lower for key in ["revision", "rev"]):
                 score -= 0.6
 
+        authoritative_abbreviations = {
+            "qty": "quantity",
+            "desc": "description",
+            "mfr pn": "manufacturer_part_number",
+            "mpn": "manufacturer_part_number",
+            "ref": "reference_designator",
+            "value": "value",
+            "designator": "reference_designator"
+        }
+        normalized_col = self._normalize_header_text(column_name)
+        if authoritative_abbreviations.get(normalized_col) == field_id:
+            score = max(score, 0.95)
+
         return score
 
     def _name_score(self, column_name: str, field_id: str, name_based: Optional[str]) -> float:
