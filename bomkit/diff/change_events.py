@@ -67,6 +67,9 @@ class ChangeEventType(Enum):
     
     # Placement changes
     REFERENCE_DESIGNATOR_CHANGED = auto()  # Reference designator(s) changed
+
+    # Compliance changes
+    COMPLIANCE_VIOLATION = auto()          # Hazardous substance declaration violates threshold limits
     
     # Fallback (low confidence)
     UNCLASSIFIED_CHANGE = auto()   # Changed but cannot confidently classify
@@ -132,6 +135,7 @@ class ItemDelta:
     supplier_changed: bool = False
     mpn_changed: bool = False
     reference_designator_changed: bool = False
+    compliance_violation: bool = False
     
     # Set of changed attribute names (for SPEC_ATTRIBUTE_CHANGED detection)
     changed_attributes: Set[str] = field(default_factory=set)
@@ -154,6 +158,7 @@ class ItemDelta:
             self.supplier_changed or
             self.mpn_changed or
             self.reference_designator_changed or
+            self.compliance_violation or
             len(self.changed_attributes) > 0
         )
 
@@ -344,8 +349,12 @@ def _compute_item_delta_from_modified(modified: ModifiedItem) -> ItemDelta:
     )
     
     for change in modified.changes:
+        # Compliance violation change
+        if change.type == "COMPLIANCE_VIOLATION":
+            delta.compliance_violation = True
+
         # Quantity change
-        if change.type == "QUANTITY_CHANGED":
+        elif change.type == "QUANTITY_CHANGED":
             delta.quantity_changed = True
             delta.quantity_from = change.from_value
             delta.quantity_to = change.to_value
@@ -367,6 +376,11 @@ def _compute_item_delta_from_modified(modified: ModifiedItem) -> ItemDelta:
                 # Check for supplier change
                 elif field_lower in SUPPLIER_KEYS or any(k in field_lower for k in SUPPLIER_KEYS):
                     delta.supplier_changed = True
+
+                # Check for compliance status change
+                elif field_lower in ("compliance_status", "compliance") and change.to_value == "NON_COMPLIANT":
+                    delta.compliance_violation = True
+                    delta.changed_attributes.add(field_name)
                 
                 # Check for reference designator change
                 elif field_lower in REFDES_KEYS or any(k in field_lower for k in REFDES_KEYS):
@@ -420,6 +434,27 @@ def _compute_item_delta_removed(bom_item_id: UUID) -> ItemDelta:
 # =============================================================================
 # Ordered, explicit rules. First match wins.
 # Each rule is a function: (ItemDelta) -> Optional[ChangeEvent]
+
+def _classify_compliance_violation(delta: ItemDelta) -> Optional[ChangeEvent]:
+    """
+    Rule: Part contains hazardous materials exceeding compliance threshold limits.
+
+    Produces: COMPLIANCE_VIOLATION (HIGH severity, QUALITY domain)
+    """
+    if not delta.compliance_violation:
+        return None
+
+    return ChangeEvent(
+        bom_item_id=delta.bom_item_id,
+        part_id=delta.part_id,
+        event_type=ChangeEventType.COMPLIANCE_VIOLATION,
+        severity=Severity.HIGH,
+        affected_domains=[Domain.QUALITY],
+        evidence=delta.field_changes,
+        summary="Environmental compliance violation detected",
+        delta=delta
+    )
+
 
 def _classify_added(delta: ItemDelta) -> Optional[ChangeEvent]:
     """
@@ -670,6 +705,7 @@ def _classify_unclassified(delta: ItemDelta) -> Optional[ChangeEvent]:
 # Ordered list of classification rules
 # CRITICAL: Order matters - first match wins
 CLASSIFICATION_RULES = [
+    _classify_compliance_violation,
     _classify_added,
     _classify_removed,
     _classify_substituted,

@@ -226,21 +226,29 @@ def test_reference_designator_normalization():
     print(f"{'='*60}")
     
     test_cases = [
-        ("R1, R2, R3", "R1-R3"),
-        ("D1, D2, D3, D4, D5, D6, D7, D8", "D1-D8"),
-        ("C1, C2, C4", "C1-C2, C4"),
-        ("R1-R5", "R1-R5"),  # Already formatted
+        ("R1-R3", "R1, R2, R3"),
+        ("D1-D8", "D1, D2, D3, D4, D5, D6, D7, D8"),
+        ("C1-C2, C4", "C1, C2, C4"),
+        ("R1-R5", "R1, R2, R3, R4, R5"),  # Already formatted
         ("R1, R3, R5", "R1, R3, R5"),  # Non-consecutive
-        ("R1, R2, R3, R5, R6", "R1-R3, R5-R6"),  # Multiple ranges
+        ("R1-R3, R5-R6", "R1, R2, R3, R5, R6"),  # Multiple ranges
         ("U1", "U1"),  # Single item
-        ("R1, R2,", "R1-R2"),  # Trailing comma
-        ("R10, R11, R12", "R10-R12"),  # Multi-digit numbers
+        ("R1, R2,", "R1, R2"),  # Trailing comma
+        ("R10-R12", "R10, R11, R12"),  # Multi-digit numbers
+    # Issue #11: whitespace-tolerant and double-dot ranges
+        ("C1 - C5", "C1, C2, C3, C4, C5"),
+        ("C10 - C12", "C10, C11, C12"),
+        ("R1..R4", "R1, R2, R3, R4"),
+        ("R1 .. R4", "R1, R2, R3, R4"),
+        ("R5-R1", "R5-R1"),
+        ("R5..R1", "R5..R1"),
     ]
     
     all_passed = True
     for input_val, expected in test_cases:
         result = normalizer.normalize_reference_designator(input_val)
         passed = result == expected
+        assert passed, f"'{input_val}' -> '{result}' (expected: '{expected}')"
         status = "✓" if passed else "✗"
         if not passed:
             all_passed = False

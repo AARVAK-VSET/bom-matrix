@@ -74,3 +74,37 @@ def test_excel_adapter_detects_bom_sheet():
         assert rows[0]["Value"] == "10k"
     finally:
         test_file.unlink(missing_ok=True)
+def test_utf8_encoding_uses_sig(tmp_path):
+    """Ensure UTF-8 CSV files use BOM-safe UTF-8 decoding."""
+    csv_file = tmp_path / "test_utf8_encoding.csv"
+
+    csv_file.write_text(
+        "Item,Quantity\nCafé,2\n",
+        encoding="utf-8"
+    )
+
+    adapter = CsvAdapter()
+
+    assert adapter._detect_encoding(str(csv_file)) == "utf-8-sig"
+    
+
+def test_obfuscated_header_row_is_not_leaked_as_data(tmp_path):
+    """A cryptic header row (e.g. Column1,Column2,Column3) must be used as
+    the header rather than leaking into the data rows."""
+    csv_file = tmp_path / "obfuscated.csv"
+    values = [
+        "STM32F401RCT6", "STM32F103C8T6", "ATmega328P", "ESP32-WROOM-32",
+        "RC0603FR-0710KL", "LM358", "1N4148", "2N3904", "MAX232", "74LS138",
+    ]
+    with open(csv_file, "w", newline="") as f:
+        f.write("Column1,Column2,Column3\n")
+        for i, value in enumerate(values):
+            f.write(f"{value},{i + 1},R{i + 1}\n")
+
+    parser = BomParser(normalize=True)
+    parser.register_adapter(CsvAdapter())
+
+    rows = parser.parse(str(csv_file))
+    assert len(rows) == 10
+    assert all(row["manufacturer_part_number"] in values for row in rows)
+    assert all(str(row["reference_designator"]).startswith("R") for row in rows)

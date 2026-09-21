@@ -7,6 +7,11 @@ from .snapshot_ingest import (
     normalize_row_from_dict
 )
 from .supabase_client import SupabaseClient
+from .multisheet_tree import (
+    expand_sub_assembly_tree,
+    reconcile_sub_assembly_tree,
+    detect_cycle_in_branch,
+)
 from bomkit.diff import diff_snapshots, DiffResult
 
 # NOTE: diff types are re-exported for backward compatibility with tests.
@@ -17,6 +22,9 @@ __all__ = [
     "DatabaseClient",
     "SupabaseClient",
     "normalize_row_from_dict",
+    "expand_sub_assembly_tree",
+    "reconcile_sub_assembly_tree",
+    "detect_cycle_in_branch",
     "diff_snapshots",
     "DiffResult",
 ]
