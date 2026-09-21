@@ -318,6 +318,15 @@ class DatabaseClient:
         """
         raise NotImplementedError
     
+    def delete_snapshot(self, snapshot_id: UUID) -> None:
+        """
+        Delete a snapshot and all its items (compensating transaction).
+        
+        Args:
+            snapshot_id: Snapshot ID
+        """
+        raise NotImplementedError
+    
     def insert_snapshot_item(
         self,
         snapshot_id: UUID,
@@ -1049,5 +1058,13 @@ def ingest_bom_snapshot(
     except Exception as e:
         # Rollback on any error
         db.rollback_transaction()
+        
+        # Compensating transaction for databases without transaction support
+        if 'snapshot_id' in locals() and snapshot_id is not None:
+            try:
+                db.delete_snapshot(snapshot_id)
+            except Exception as cleanup_err:
+                logger.error(f"Failed to cleanup partial snapshot {snapshot_id}: {cleanup_err}")
+                
         logger.error(f"BOM snapshot ingestion failed: {e}", exc_info=True)
         raise

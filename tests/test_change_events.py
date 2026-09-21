@@ -759,3 +759,43 @@ def test_case_insensitive_part_number_matching():
     assert changes[0].type == "ATTRIBUTE_CHANGED"
     assert changes[0].field == "manufacturer_part_number"
 
+def test_reference_designator_reordering_is_ignored():
+    item_id = uuid4()
+
+    state_a = SnapshotItemState(
+        bom_item_id=item_id,
+        quantity=1,
+        attributes={"reference_designator": "R1, R2"},
+        checksum="a",
+    )
+
+    state_b = SnapshotItemState(
+        bom_item_id=item_id,
+        quantity=1,
+        attributes={"reference_designator": "R2, R1"},
+        checksum="b",
+    )
+
+    changes = diff_snapshot_item(state_a, state_b)
+
+    assert changes == []
+def test_reference_designator_reordering_is_ignored():
+    item_id = uuid4()
+
+    state_a = SnapshotItemState(
+        bom_item_id=item_id,
+        quantity=1,
+        attributes={"reference_designator": "R1, R2"},
+        checksum="a",
+    )
+
+    state_b = SnapshotItemState(
+        bom_item_id=item_id,
+        quantity=1,
+        attributes={"reference_designator": "R2, R1"},
+        checksum="b",
+    )
+
+    changes = diff_snapshot_item(state_a, state_b)
+
+    assert changes == []
