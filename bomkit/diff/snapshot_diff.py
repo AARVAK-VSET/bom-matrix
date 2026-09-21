@@ -102,6 +102,10 @@ def _create_semantic_key(part_id: Optional[UUID], quantity: Optional[Union[int, 
     """
     # Filter to semantic attributes only
     semantic_attrs = _filter_semantic_attributes(attributes)
+    if "manufacturer_part_number" in semantic_attrs:
+        semantic_attrs["manufacturer_part_number"] = str(
+            semantic_attrs["manufacturer_part_number"]
+        ).upper()
     
     # Create a stable representation
     key_parts = [
