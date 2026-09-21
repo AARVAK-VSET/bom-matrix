@@ -766,8 +766,8 @@ class BomNormalizer:
                 continue
 
             # Check if it's already a range (e.g., "R1-R5")
-            if '-' in part and not part.startswith('-'):
-                range_parts = part.split('-', 1)
+            if ('-' in part or '..' in part) and not part.startswith('-'):
+                range_parts = re.split(r'\s*(?:-|\.\.)\s*', part, maxsplit=1)
                 if len(range_parts) == 2:
                     start = range_parts[0].strip()
                     end = range_parts[1].strip()
@@ -778,9 +778,16 @@ class BomNormalizer:
                         start_prefix, start_num = start_match.groups()
                         end_prefix, end_num = end_match.groups()
                         if start_prefix == end_prefix:
-                            # Expand the range to individual designators
-                            for num in range(int(start_num), int(end_num) + 1):
-                                parseable_designators.append((start_prefix, num))
+                            start_num = int(start_num)
+                            end_num = int(end_num)
+
+                            if start_num <= end_num:
+                                # Expand the range to individual designators
+                                for num in range(start_num, end_num + 1):
+                                    parseable_designators.append((start_prefix, num))
+                            else:
+                                # Invalid reversed range, keep as-is
+                                unparseable.append(part)
                         else:
                             # Different prefixes, treat as separate
                             parseable_designators.append((start_prefix, int(start_num)))
