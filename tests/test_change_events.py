@@ -758,3 +758,4 @@ def test_case_insensitive_part_number_matching():
     assert len(changes) == 1
     assert changes[0].type == "ATTRIBUTE_CHANGED"
     assert changes[0].field == "manufacturer_part_number"
+
