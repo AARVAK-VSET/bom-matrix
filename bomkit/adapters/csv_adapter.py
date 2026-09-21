@@ -146,6 +146,21 @@ class CsvAdapter:
 
         return score, header_hits
 
+    def _looks_like_label_row(self, row: List[str]) -> bool:
+        """Whether row cells read like column labels rather than values.
+
+        A label row has at least two non-empty cells, none purely numeric,
+        and every non-empty cell containing letters. Structured data rows
+        (e.g. mixed part numbers, quantities, reference designators) fail
+        at least one of these conditions.
+        """
+        non_empty = [cell.strip() for cell in row if cell is not None and cell.strip()]
+        if len(non_empty) < 2:
+            return False
+        if any(re.fullmatch(r'[\d\.\-]+', cell) for cell in non_empty):
+            return False
+        return all(re.search(r'[a-zA-Z]', cell) for cell in non_empty)
+
     def _select_header_row(self, rows: List[List[str]]) -> int:
         """Select the best header row index from the first N rows."""
         if not rows:
@@ -166,6 +181,23 @@ class CsvAdapter:
         # Require a minimum quality for a header row
         if best_idx >= 0 and (best_score >= 2.0 or best_hits >= 2):
             return best_idx
+
+        # No alias-based header matched. Obfuscated or cryptic headers (e.g.
+        # "Column1, Column2, Column3") still look like labels; accept the first
+        # label-shaped row only when the following data rows read as values,
+        # so value rows that themselves look label-like are never consumed.
+        for idx, row in enumerate(rows[:50]):
+            if not any((cell or '').strip() for cell in row):
+                continue
+            if not self._looks_like_label_row(row):
+                continue
+            next_row = next(
+                (r for r in rows[idx + 1:] if any((cell or '').strip() for cell in r)),
+                None,
+            )
+            if next_row is not None and not self._looks_like_label_row(next_row):
+                return idx
+            return -1
 
         return -1
 
