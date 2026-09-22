@@ -272,6 +272,8 @@ class CsvAdapter:
         try:
             with open(file_path, 'r', encoding=encoding, newline='') as f:
                 # Use Sniffer for more robust delimiter detection if needed
+                dialect=None
+
                 try:
                     sample = f.read(2048)
                     f.seek(0)
@@ -282,7 +284,11 @@ class CsvAdapter:
                     # Fall back to detected delimiter
                     pass
 
-                reader = csv.reader(f, delimiter=delimiter)
+                reader = (
+                    csv.reader(f, dialect=dialect)
+                    if dialect is not None
+                    else csv.reader(f, delimiter=delimiter)
+                )
                 all_rows = [row for row in reader]
 
                 if not all_rows:
