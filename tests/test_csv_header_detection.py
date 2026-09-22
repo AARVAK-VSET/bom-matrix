@@ -108,3 +108,29 @@ def test_obfuscated_header_row_is_not_leaked_as_data(tmp_path):
     assert len(rows) == 10
     assert all(row["manufacturer_part_number"] in values for row in rows)
     assert all(str(row["reference_designator"]).startswith("R") for row in rows)
+
+def test_multiline_quoted_csv_field():
+    """Ensure quoted multiline fields remain a single logical record."""
+    from bomkit.adapters.csv_adapter import CsvAdapter
+
+    csv_file = Path(__file__).parent / "multiline_test.csv"
+
+    csv_file.write_text(
+        'part_number,description,quantity\n'
+        "P001,'Water sensor\n"
+        "with temperature probe',2\n"
+        "P002,'Pressure sensor',1\n",
+        encoding="utf-8",
+    )
+
+    try:
+        adapter = CsvAdapter()
+        rows = adapter.read(str(csv_file))
+
+        assert len(rows) == 2
+        assert rows[0]["part_number"] == "P001"
+        assert rows[0]["description"] == "Water sensor\r\nwith temperature probe"
+        assert rows[0]["quantity"] == "2"
+        assert rows[1]["part_number"] == "P002"
+    finally:
+        csv_file.unlink(missing_ok=True)
