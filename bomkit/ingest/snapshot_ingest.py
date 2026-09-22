@@ -127,9 +127,12 @@ def normalize_row_from_dict(
     else:
         context_supplier = None
     
-    # Extract tolerance from notes if present (common pattern)
-    notes = row_dict.get("notes", "")
-    if notes:
+    # Extract tolerance from the canonical cleaned field if present, otherwise
+    # from notes if present (common pattern).
+    if row_dict.get("tolerance"):
+        attributes["tolerance"] = row_dict["tolerance"]
+    elif row_dict.get("notes"):
+        notes = row_dict["notes"]
         # Try to extract tolerance (e.g., "Tolerance: 5%")
         import re
         tolerance_match = re.search(r'tolerance[:\s]+([0-9.]+%)', notes, re.IGNORECASE)

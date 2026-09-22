@@ -13,6 +13,16 @@ from .compliance import (
     generate_compliance_delta_events,
 )
 from .confidence import ConfidenceScorer, build_confidence_report, classify_component
+from .clean import (
+    CleaningPipeline,
+    clean_row,
+    clean_rows,
+    strip_vendor_packaging,
+    extract_tolerance,
+    detect_package,
+    canonical_value,
+    value_to_si,
+)
 
 __all__ = [
     "BomParser",
@@ -34,4 +44,12 @@ __all__ = [
     "ConfidenceScorer",
     "build_confidence_report",
     "classify_component",
+    "CleaningPipeline",
+    "clean_row",
+    "clean_rows",
+    "strip_vendor_packaging",
+    "extract_tolerance",
+    "detect_package",
+    "canonical_value",
+    "value_to_si",
 ]

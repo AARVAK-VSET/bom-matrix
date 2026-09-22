@@ -5,6 +5,7 @@ import re
 from .column_profiler import ColumnProfiler
 from .lexical_similarity import LexicalSimilarity
 from .schema import STANDARD_HEADERS, COLUMN_MAPPINGS, CANONICAL_FIELDS
+from .clean.pipeline import CleaningPipeline
 
 # Weights applied to the header lexical score and the content value-profile
 # score when both signals are available. Each contributes up to its weight;
@@ -61,14 +62,20 @@ class BomNormalizer:
     profiling to disambiguate ambiguous headers and infer mappings.
     """
 
-    def __init__(self, use_column_profiling: bool = True):
+    def __init__(self, use_column_profiling: bool = True, clean: bool = True):
         """Initialize the normalizer with column mappings.
 
         Args:
             use_column_profiling: If True, use data profiling to improve
                 column mapping and disambiguation (default: True).
+            clean: If True, run the multi-stage cleaning pipeline over the
+                normalized rows (vendor packaging-code strip, tolerance
+                extraction, package detection and value-unit canonicalization,
+                per Issue #24; default: True).
         """
         self.use_column_profiling = use_column_profiling
+        self.clean = clean
+        self._cleaner = CleaningPipeline()
         self._lexical = LexicalSimilarity()
 
         # Create reverse lookup: normalized column name -> list of variations
@@ -718,20 +725,29 @@ class BomNormalizer:
 
         return normalized_row
 
-    def normalize(self, raw_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def normalize(self, raw_rows: List[Dict[str, Any]], clean: Optional[bool] = None) -> List[Dict[str, Any]]:
         """Normalize a list of raw rows to the standard template.
 
         Args:
             raw_rows: List of dictionaries representing BOM rows
+            clean: Whether to run the multi-stage cleaning pipeline over the
+                normalized rows. Defaults to the value configured at
+                construction time (``clean=True``).
 
         Returns:
-            List of dictionaries with standard column names
+            List of dictionaries with standard column names, plus derived
+            canonical fields (``tolerance``, ``packaging``, ``packaging_qty``,
+            ``value_si``) when cleaning recovered them.
         """
         if not raw_rows:
             return []
 
         mapping = self.infer_column_mapping(raw_rows) if self.use_column_profiling else None
-        return [self.normalize_row(row, mapping=mapping) for row in raw_rows]
+        normalized = [self.normalize_row(row, mapping=mapping) for row in raw_rows]
+
+        if self.clean if clean is None else clean:
+            return self._cleaner.clean_rows(normalized)
+        return normalized
 
     def normalize_reference_designator(self, ref_des: str) -> str:
         """Normalize reference designator string to comma-separated list format.
