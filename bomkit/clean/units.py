@@ -30,12 +30,50 @@ _SI_FAMILIES: List[Tuple[str, str, Dict[str, float]]] = [
     ("Hz", "Hz", {"hz": 1.0, "khz": 1e3, "mhz": 1e6, "ghz": 1e9}),
     ("s", "s", {"us": 1e-6, "ms": 1e-3, "s": 1.0}),
 ]
-_SI_LOOKUP: Dict[str, Tuple[str, float]] = {}
+# SI prefixes. Case matters: "M" is mega, "m" is milli, "K"/"k" kilo,
+# "G"/"g" giga. Prefixes are kept case-sensitive so "1MΩ" (mega-ohm) is never
+# folded onto milli-ohm.
+_SI_PREFIXES: Dict[str, float] = {
+    "p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6, "μ": 1e-6,
+    "m": 1e-3, "k": 1e3, "K": 1e3, "M": 1e6, "g": 1e9, "G": 1e9, "T": 1e12,
+}
+
+# Base (multiplier-1.0) units per family, used for prefix resolution.
+_BASE_LOOKUP: Dict[str, Tuple[str, float]] = {}
 for _base, _si, _factors in _SI_FAMILIES:
     for _alias, _mult in _factors.items():
-        _SI_LOOKUP[_alias] = (_si, _mult)
+        if _mult == 1.0 and _alias not in _BASE_LOOKUP:
+            _BASE_LOOKUP[_alias] = (_si, 1.0)
 
 _VALUE_RE = re.compile(r"^([\d.,]+)\s*([a-zA-ZΩ]+)$")
+# Resistor R-decimal notation ("0R1", "4R7", "1R5") where "R" is the
+# decimal point in the ohm family. Only a single R is allowed.
+_R_DECIMAL_RE = re.compile(r"(\d*)[Rr](\d*)")
+
+
+def _resolve_unit(unit: str) -> Optional[Tuple[str, float]]:
+    """Resolve a unit token to ``(si_unit, multiplier)``.
+
+    The leading SI prefix is matched case-sensitively (``M`` = mega, ``m`` =
+    milli), so ``"MΩ"`` never collides with ``"mΩ"``; the rest of the token is
+    matched case-insensitively.
+    """
+    u = unit.replace("ω", "Ω")
+    # Legacy "MF"/"MFD" (uppercase M + F) commonly denotes microfarads in
+    # older BOMs; "mF" stays milli-farad.
+    if u in ("MF", "MFD"):
+        return "F", 1e-6
+    if len(u) >= 2 and u[0] in _SI_PREFIXES and u[1].isalpha():
+        prefix_mult = _SI_PREFIXES[u[0]]
+        base = u[1:].lower().replace("ω", "Ω")
+        if "µ" in base or "μ" in base:
+            return None  # rarely reachable: canonical_value already maps micro->u
+        entry = _BASE_LOOKUP.get(base)
+        return None if entry is None else (entry[0], prefix_mult * entry[1])
+    base = u.lower().replace("ω", "Ω")
+    if "µ" in base or "μ" in base:
+        return None
+    return _BASE_LOOKUP.get(base)
 
 
 def _replace_decimal_comma(value: str) -> str:
@@ -78,25 +116,26 @@ def value_to_si(value: str) -> Optional[str]:
         return None
     s = canonical_value(value)
     s = _replace_decimal_comma(s)
+    # Resistor R-decimal notation: "0R1" -> 0.1 Ω, "4R7" -> 4.7 Ω.
+    rm = _R_DECIMAL_RE.fullmatch(s)
+    if rm and s.count("R") + s.count("r") == 1:
+        whole, frac = rm.group(1) or "0", rm.group(2) or "0"
+        magnitude = float(f"{whole}.{frac}") if rm.group(2) else float(whole)
+        return None if magnitude == 0 else f"{magnitude:g} Ω"
     m = _VALUE_RE.match(s)
     if not m:
         return None
-    magnitude_str, unit_str = m.group(1), m.group(2)
-    # Lowercase the unit, folding the Greek omega (U+03A9 -> U+03C9 via
-    # str.lower) back so the lookup table keys stay canonical.
-    unit_key = unit_str.lower().replace("ω", "Ω")
-    if "µ" in unit_key or "μ" in unit_key:
-        return None  # rarely reachable: canonical_value already maps micro->u
     try:
-        magnitude = float(magnitude_str)
+        magnitude = float(m.group(1))
     except ValueError:
         return None
-    entry = _SI_LOOKUP.get(unit_key)
-    if entry is None or magnitude == 0:
+    if magnitude == 0:
         return None
-    si_unit, factor = entry
-    result = magnitude * factor
-    return f"{result:g} {si_unit}"
+    resolved = _resolve_unit(m.group(2))
+    if resolved is None:
+        return None
+    si_unit, factor = resolved
+    return f"{magnitude * factor:g} {si_unit}"
 
 
 def canonical_uom(unit: str) -> str:

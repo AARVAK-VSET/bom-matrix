@@ -80,19 +80,32 @@ def detect_package(value: str = "", description: str = "", notes: str = "",
     if not text:
         return None
 
-    # Family patterns take precedence (they are more specific).
+    # Family patterns take precedence (they are more specific) and may use all
+    # fields.
     m = _FAMILY_RE.search(text)
     if m:
         return _canonicalize_family(m.group(0))
 
-    # SMD chip sizes.
-    m = _CHIP_RE.search(text)
+    # SMD chip sizes: full scan (imperial + metric mapping) over the structured
+    # fields — value, description, manufacturer part number. Notes are excluded
+    # from metric mapping because free-form prose is far too ambiguous ("lot
+    # 2012 units" must never be read as an 0805 package); notes may only carry
+    # an already-canonical EIA imperial code such as "0805" (common in exports).
+    structured = " ".join(filter(None, [
+        str(value or ""), str(description or ""), str(mpn or ""),
+    ]))
+    m = _CHIP_RE.search(structured)
     if m:
         size = m.group("size")
         if size in _CHIP_SIZES:
             return size
         if size in _METRIC_TO_IMPERIAL:
             return _METRIC_TO_IMPERIAL[size]
+
+    # Notes: exact EIA imperial tokens only (never a metric code).
+    m = _CHIP_RE.search(str(notes or ""))
+    if m and m.group("size") in _CHIP_SIZES:
+        return m.group("size")
 
     # Embedded case code in the manufacturer part number (conservative: only
     # the MPN, letter-flanked, not digit-continued).

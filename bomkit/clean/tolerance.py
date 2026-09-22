@@ -16,10 +16,23 @@ from typing import Optional, Tuple
 # "±5%", " 5 %", "(±1%)", "+10/-5%". The trailing space before a letter code
 # ("100nF ±5% J") is intentionally left in place so the letter code stays
 # whitespace-separated for the later stage.
-_PERCENT_RE = re.compile(r"[\s\-,;(]*([±+\-]?\s*\d+(?:\.\d+)?\s*%(?:\s*/\s*[±+\-]?\s*\d+(?:\.\d+)?\s*%)?)[\-,;)]*")
+#
+# Separator classes are bounded to a single optional character (instead of an
+# unbounded run) so pathological long fields cannot trigger quadratic
+# backtracking.
+_PERCENT_RE = re.compile(r"[\s\-,;(]?([±+\-]?\s*\d+(?:\.\d+)?\s*%(?:\s*/\s*[±+\-]?\s*\d+(?:\.\d+)?\s*%)?)[\-,;)]?")
+
+# Asymmetric percentage tolerance: percent on both parts ("+10%/-5%") or on
+# the second part only ("+10/-5%").
+_ASYMMETRIC_PERCENT_RE = re.compile(
+    r"(?P<tok>"
+    r"[±+\-]?\s*\d+(?:\.\d+)?\s*%\s*/\s*[±+\-]?\s*\d+(?:\.\d+)?\s*%"
+    r"|[±+\-]?\s*\d+(?:\.\d+)?\s*/\s*[±+\-]?\s*\d+(?:\.\d+)?\s*%"
+    r")[\-,;)]?"
+)
 
 # Absolute tolerance prefixed with a plus-or-minus sign: "±0.1pF", "+/-1uF".
-_ABSOLUTE_RE = re.compile(r"[\s\-(;]*([±+\-]\s*\d+(?:\.\d+)?\s*(?:[pnumkMG]?[A-Za-zΩµμ]+))[\-,;)]*")
+_ABSOLUTE_RE = re.compile(r"[\s\-(;]?([±+\-]\s*\d+(?:\.\d+)?\s*(?:[pnumkMG]?[A-Za-zΩµμ]+))[\-,;)]?")
 
 # EIA/letter tolerance codes, uppercase, only recognized when space-separated
 # from the value so unit letters already consumed by the magnitude (e.g. the
@@ -30,13 +43,16 @@ _LETTER_CODES = {
     "G": "±2%", "J": "±5%", "K": "±10%", "M": "±20%",
     "P": "+100%/-0%", "Z": "+80%/-20%", "A": "±0.05%",
 }
-_LETTER_RE = re.compile(r"\s+[\(]?([A-FHJKMNPZ])[\)]?\s*$")
+_LETTER_RE = re.compile(r"\s+[\(]?([A-HJKMNPZ])[\)]?\s*$")
 _HAS_UNIT_RE = re.compile(r"\d\s*[pnumkMGμµ]?[A-Za-zΩ]+")
 _HAS_NUMBER_RE = re.compile(r"\d")
 
 # Notes patterns ("Tolerance: 5%", "Tol ±10%", "1% tolerance").
 _NOTES_PERCENT_RE = re.compile(
     r"(?:tolerance|tol)\s*[:=]?\s*([±+\-]?\s*\d+(?:\.\d+)?\s*%)", re.IGNORECASE
+)
+_NOTES_PERCENT_SUFFIX_RE = re.compile(
+    r"([±+\-]?\s*\d+(?:\.\d+)?\s*%)\s*(?:tolerance|tol)\b", re.IGNORECASE
 )
 
 
@@ -69,18 +85,20 @@ def extract_tolerance(value: str, notes: str = "") -> Tuple[str, str]:
     cleaned = value
     tolerance = ""
 
-    for pattern in (_PERCENT_RE, _ABSOLUTE_RE):
-        if not cleaned:
-            break
-        m = pattern.search(cleaned)
-        if not m:
-            continue
-        token = m.group(1).strip()
-        if not tolerance:
-            tolerance = _normalize_tolerance(token)
-        # Remove the whole match span (including wrapping parentheses / spaces)
-        # so no ``()`` residue is left behind.
-        cleaned = cleaned[: m.start()] + cleaned[m.end():]
+    # Remove every tolerance token from the value (all matches, not just the
+    # first) so a doubly-annotated value like "1kΩ ±5% ±2%" is fully cleaned
+    # and a second cleaning pass is a no-op.
+    for pattern in (_ASYMMETRIC_PERCENT_RE, _PERCENT_RE, _ABSOLUTE_RE):
+        while cleaned:
+            m = pattern.search(cleaned)
+            if not m:
+                break
+            token = (m.groupdict().get("tok") or m.group(1)).strip()
+            if not tolerance:
+                tolerance = _normalize_tolerance(token)
+            # Remove the whole match span (including wrapping parentheses /
+            # spaces) so no ``()`` residue is left behind.
+            cleaned = cleaned[: m.start()] + cleaned[m.end():]
 
     # Letter codes: only for values that look electrical (a unit or a numeric
     # magnitude) and where the code is whitespace-separated so it can never be
@@ -97,9 +115,10 @@ def extract_tolerance(value: str, notes: str = "") -> Tuple[str, str]:
                 if not tolerance:
                     tolerance = _LETTER_CODES[code]
 
-    # Notes tolerance (percent only), canonicalized the same way.
+    # Notes tolerance (percent only), canonicalized the same way. Handles both
+    # "Tolerance: 5%" and "1% tolerance" phrasings.
     if not tolerance and notes:
-        nm = _NOTES_PERCENT_RE.search(str(notes))
+        nm = _NOTES_PERCENT_RE.search(str(notes)) or _NOTES_PERCENT_SUFFIX_RE.search(str(notes))
         if nm:
             tolerance = _normalize_tolerance(nm.group(1).strip())
 

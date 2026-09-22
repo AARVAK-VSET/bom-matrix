@@ -49,12 +49,16 @@ class CleaningPipeline:
         mpn = str(out.get("manufacturer_part_number") or "").strip()
         if mpn:
             cleaned_mpn, packaging, packaging_qty = strip_vendor_packaging(mpn)
-            if cleaned_mpn != mpn or packaging:
-                out["manufacturer_part_number"] = cleaned_mpn
-            if packaging:
-                out["packaging"] = packaging
-            if packaging_qty is not None:
-                out["packaging_qty"] = str(packaging_qty)
+            # A marker-only value ("TR", "REEL") must never wipe the part
+            # number: when nothing legitimately remains, keep the original
+            # untouched and drop the (unsupported) packaging metadata.
+            if cleaned_mpn:
+                if cleaned_mpn != mpn or packaging:
+                    out["manufacturer_part_number"] = cleaned_mpn
+                if packaging:
+                    out["packaging"] = packaging
+                if packaging_qty is not None:
+                    out["packaging_qty"] = str(packaging_qty)
 
         value_raw = str(out.get("value") or "").strip()
         if value_raw:

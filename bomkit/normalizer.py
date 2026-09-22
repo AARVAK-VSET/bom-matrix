@@ -5,7 +5,7 @@ import re
 from .column_profiler import ColumnProfiler
 from .lexical_similarity import LexicalSimilarity
 from .schema import STANDARD_HEADERS, COLUMN_MAPPINGS, CANONICAL_FIELDS
-from .clean.pipeline import CleaningPipeline
+from .clean.pipeline import CleaningPipeline, DERIVED_FIELDS
 
 # Weights applied to the header lexical score and the content value-profile
 # score when both signals are available. Each contributes up to its weight;
@@ -703,8 +703,12 @@ class BomNormalizer:
                 else:
                     normalized_row[standard_key] = str(value) if value is not None else ""
             else:
-                # Unmapped columns go to notes
-                if value:
+                # Unmapped columns go to notes. Cleaning-derived fields
+                # (tolerance, packaging, packaging_qty, value_si) are preserved
+                # as first-class output fields instead, so re-normalizing an
+                # already-cleaned row never folds machine-generated text into
+                # the notes column (idempotent round-trips).
+                if value and original_key not in DERIVED_FIELDS:
                     if normalized_row["notes"]:
                         normalized_row["notes"] = f"{normalized_row['notes']}; {original_key}: {value}"
                     else:
@@ -743,7 +747,16 @@ class BomNormalizer:
             return []
 
         mapping = self.infer_column_mapping(raw_rows) if self.use_column_profiling else None
-        normalized = [self.normalize_row(row, mapping=mapping) for row in raw_rows]
+        normalized = []
+        for row in raw_rows:
+            item = self.normalize_row(row, mapping=mapping)
+            # Carry previously-derived cleaning fields across re-normalization
+            # so cleaning is idempotent and derived data is never lost to the
+            # notes column.
+            for key in DERIVED_FIELDS:
+                if row.get(key) and not item.get(key):
+                    item[key] = str(row[key])
+            normalized.append(item)
 
         if self.clean if clean is None else clean:
             return self._cleaner.clean_rows(normalized)

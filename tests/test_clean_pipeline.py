@@ -418,3 +418,142 @@ def test_standard_dataset_field_level():
     assert by_part["R15"]["value_si"] == "100 Ω"
     assert by_part["R12"]["tolerance"] == "±5%"          # ASCII +/-5%
     assert by_part["R13"]["package"] == "1206"           # embedded MPN case
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for adversarial-audit findings (BUG-01 .. BUG-12)
+# ---------------------------------------------------------------------------
+
+# BUG-01: uppercase mega-prefix must never fold onto milli.
+@pytest.mark.parametrize("value,expected", [
+    ("1MΩ", "1e+06 Ω"),
+    ("10MΩ", "1e+07 Ω"),
+    ("2.2MΩ", "2.2e+06 Ω"),
+    ("1mΩ", "0.001 Ω"),      # milli stays milli
+    ("1Mohm", "1e+06 Ω"),
+    ("1mH", "0.001 H"),
+    ("1MHz", "1e+06 Hz"),
+    ("1mHz", "0.001 Hz"),
+    ("1mV", "0.001 V"),
+])
+def test_value_to_si_case_sensitive_prefix(value, expected):
+    assert value_to_si(value) == expected
+
+
+# BUG-10: legacy uppercase "MF"/"MFD" means microfarad; "mF" stays milli.
+@pytest.mark.parametrize("value,expected", [
+    ("10MF", "1e-05 F"),
+    ("100MFD", "0.0001 F"),
+    ("1mF", "0.001 F"),
+])
+def test_value_to_si_legacy_microfarad(value, expected):
+    assert value_to_si(value) == expected
+
+
+# BUG-11: resistor R-decimal notation.
+@pytest.mark.parametrize("value,expected", [
+    ("0R1", "0.1 Ω"),
+    ("4R7", "4.7 Ω"),
+    ("1R5", "1.5 Ω"),
+    ("470R", "470 Ω"),
+])
+def test_value_to_si_r_decimal(value, expected):
+    assert value_to_si(value) == expected
+
+
+# BUG-02: EIA letter code G (and every other declared code) is extractable.
+@pytest.mark.parametrize("value,tolerance", [
+    ("100nF B", "±0.1%"), ("100nF C", "±0.25%"), ("100nF D", "±0.5%"),
+    ("100nF F", "±1%"), ("100nF G", "±2%"), ("100nF J", "±5%"),
+    ("100nF K", "±10%"), ("100nF M", "±20%"), ("100nF P", "+100%/-0%"),
+    ("100nF Z", "+80%/-20%"), ("100nF A", "±0.05%"),
+])
+def test_letter_code_tolerance(value, tolerance):
+    assert extract_tolerance(value) == ("100nF", tolerance)
+
+
+# BUG-03: every tolerance token is removed from the value, and re-cleaning is
+# a no-op (idempotency on real inputs).
+@pytest.mark.parametrize("value,expected_value,expected_tolerance", [
+    ("1kΩ ±5% ±2%", "1kΩ", "±5%"),
+    ("1kΩ ±2% ±5%", "1kΩ", "±2%"),
+    ("100Ω ±0.1pF ±0.2pF", "100Ω", "±0.1pF"),
+])
+def test_multiple_tolerance_tokens_full_removal(value, expected_value, expected_tolerance):
+    cleaned, tolerance = extract_tolerance(value)
+    assert (cleaned, tolerance) == (expected_value, expected_tolerance)
+    assert extract_tolerance(cleaned) == (expected_value, "")
+
+
+# BUG-04: asymmetric percentage tolerance, in both %-placements.
+@pytest.mark.parametrize("value,tolerance", [
+    ("100Ω +10/-5%", "+10/-5%"),
+    ("100Ω +10%/-5%", "+10%/-5%"),
+    ("100Ω +10/5%", "+10/5%"),
+])
+def test_asymmetric_percentage_tolerance(value, tolerance):
+    assert extract_tolerance(value)[1] == tolerance
+
+
+def test_notes_tolerance_suffix_phrasing():
+    # Comment-advertised "1% tolerance" phrasing (not just "Tolerance: 1%").
+    assert extract_tolerance("100Ω", "1% tolerance") == ("100Ω", "±1%")
+    assert extract_tolerance("100Ω", "Tolerance: 1%") == ("100Ω", "±1%")
+    assert extract_tolerance("100Ω", "tol 5%") == ("100Ω", "±5%")
+
+
+# BUG-05: no-match stripping must leave the part number unchanged.
+@pytest.mark.parametrize("raw", [
+    "RC0603FR-0710KL-", "ABC,", "A (", "X_Y_",
+])
+def test_strip_no_match_unchanged(raw):
+    assert strip_vendor_packaging(raw)[0] == raw
+
+
+# BUG-06: a marker-only MPN must never be wiped to an empty string.
+@pytest.mark.parametrize("mpn", ["TR", "CT", "REEL", "TB", "TAPE & REEL", "ND"])
+def test_marker_only_mpn_preserved(mpn):
+    row = clean_row({"manufacturer_part_number": mpn, "value": "10kΩ"})
+    assert row["manufacturer_part_number"] == mpn
+
+
+# BUG-07: free-form notes prose must not be read as a case code — metric
+# (2012/1608/…) and prose tokens stay undetected; structured fields and exact
+# EIA-imperial notes (e.g. a notes cell containing just "0805") still work.
+@pytest.mark.parametrize("notes", [
+    "lot 2012 units", "check 1608 batch",
+    "rework do 5 units after reflow", "apply paste to 12 boards",
+])
+def test_notes_free_text_never_package_code(notes):
+    assert detect_package(notes=notes) is None
+
+
+def test_package_detection_structured_and_notes_imperial():
+    assert detect_package(description="Chip resistor SMD 0603") == "0603"
+    assert detect_package(value="10kΩ 0805") == "0805"
+    assert detect_package(mpn="RC0402FR-074K7L") == "0402"
+    assert detect_package(notes="0805") == "0805"          # exact imperial
+    assert detect_package(description="Cap 2012") == "0805"  # metric in desc
+
+
+# BUG-09: normalizer round-trips are idempotent and never fold derived data
+# into the notes column.
+def test_normalizer_round_trip_idempotent_no_notes_pollution():
+    norm = BomNormalizer()
+    row = dict(_raw_row(value="10kΩ ±5%", manufacturer_part_number="RC0603FR-0710KL-TR"))
+    first = norm.normalize([row])[0]
+    second = norm.normalize([first])[0]
+    third = norm.normalize([second])[0]
+    assert first == second == third
+    assert first["notes"] == ""
+    assert first["packaging"] == "tape_and_reel"
+    assert first["tolerance"] == "±5%"
+    assert first["packaging"] == second["packaging"]
+
+
+# BUG-03/BUG-08: the noisy dataset stays fully clean after a second pass.
+def test_dataset_clean_twice_stable():
+    rows = CsvAdapter().read(str(DATASET))
+    once = BomNormalizer().normalize(rows)
+    twice = BomNormalizer().normalize(once)
+    assert once == twice

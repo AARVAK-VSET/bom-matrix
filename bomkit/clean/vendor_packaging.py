@@ -32,24 +32,24 @@ _PACKAGING_BULK = "bulk"
 # ``qty_multiplier`` is applied when a ``qty`` group is captured (e.g. ``1000``
 # turns ``16K/REEL`` into 16000). ``packaging`` is ``None`` for rules that only
 # carry a quantity hint and derive their packaging from the marker keywords.
-_PACKAGING_PATTERN = re.compile(r"(?:^|[-_/ (,.<>]+)")
+_PACKAGING_PATTERN = re.compile(r"(?:^|[-_/ (,.<>])")
 _PACKAGING_RULES = [
     # Distributor suffix codes (with optional leading separator / parentheses).
-    (re.compile(r"(?:^|[-_/ (,.<>]+)-?\s*(?:t&r|tr\d{0,2})\s*\)*\s*$", re.IGNORECASE), _PACKAGING_TAPE_AND_REEL, None),
-    (re.compile(r"(?:^|[-_/ (,.<>]+)-?\s*ct\s*\)*\s*$", re.IGNORECASE), _PACKAGING_CUT_TAPE, None),
-    (re.compile(r"(?:^|[-_/ (,.<>]+)-?\s*(?:nd|dkgr?|rl)\s*\)*\s*$", re.IGNORECASE), _PACKAGING_REEL, None),
-    (re.compile(r"(?:^|[-_/ (,.<>]+)-?\s*tb\s*\)*\s*$", re.IGNORECASE), _PACKAGING_TUBE, None),
-    (re.compile(r"(?:^|[-_/ (,.<>]+)-?\s*(?:bk|cp)\s*\)*\s*$", re.IGNORECASE), _PACKAGING_BULK, None),
+    (re.compile(r"(?:^|[-_/ (,.<>])-?\s*(?:t&r|tr\d{0,2})\s*\)*\s*$", re.IGNORECASE), _PACKAGING_TAPE_AND_REEL, None),
+    (re.compile(r"(?:^|[-_/ (,.<>])-?\s*ct\s*\)*\s*$", re.IGNORECASE), _PACKAGING_CUT_TAPE, None),
+    (re.compile(r"(?:^|[-_/ (,.<>])-?\s*(?:nd|dkgr?|rl)\s*\)*\s*$", re.IGNORECASE), _PACKAGING_REEL, None),
+    (re.compile(r"(?:^|[-_/ (,.<>])-?\s*tb\s*\)*\s*$", re.IGNORECASE), _PACKAGING_TUBE, None),
+    (re.compile(r"(?:^|[-_/ (,.<>])-?\s*(?:bk|cp)\s*\)*\s*$", re.IGNORECASE), _PACKAGING_BULK, None),
     # Quantity-annotated markers: "<nn>K/REEL", "<nnnn>/REEL", "REEL OF <nnnn>".
-    (re.compile(r"(?:^|[-_/ (,.<>]+)(?P<qty>\d{1,3})\s*k\s*/\s*(?:reel|rl|ct|tape)\s*\)*\s*$", re.IGNORECASE), None, 1000),
-    (re.compile(r"(?:^|[-_/ (,.<>]+)(?P<qty>\d{3,6})\s*/\s*(?:reel|rl|ct)\s*\)*\s*$", re.IGNORECASE), None, 1),
-    (re.compile(r"(?:^|[-_/ (,.<>]+)reel\s*(?:of\s+)?(?P<qty>\d{3,6})\s*\)*\s*$", re.IGNORECASE), _PACKAGING_REEL, 1),
+    (re.compile(r"(?:^|[-_/ (,.<>])(?P<qty>\d{1,3})\s*k\s*/\s*(?:reel|rl|ct|tape)\s*\)*\s*$", re.IGNORECASE), None, 1000),
+    (re.compile(r"(?:^|[-_/ (,.<>])(?P<qty>\d{3,6})\s*/\s*(?:reel|rl|ct)\s*\)*\s*$", re.IGNORECASE), None, 1),
+    (re.compile(r"(?:^|[-_/ (,.<>])reel\s*(?:of\s+)?(?P<qty>\d{3,6})\s*\)*\s*$", re.IGNORECASE), _PACKAGING_REEL, 1),
     # Free-text markers.
-    (re.compile(r"(?:^|[-_/ (,.<>]+)cut[\s-]?tape\s*\)*\s*$", re.IGNORECASE), _PACKAGING_CUT_TAPE, None),
-    (re.compile(r"(?:^|[-_/ (,.<>]+)tape[\s-]*(?:&|and)[\s-]*reel\s*\)*\s*$", re.IGNORECASE), _PACKAGING_TAPE_AND_REEL, None),
-    (re.compile(r"(?:^|[-_/ (,.<>]+)(?:t&r|reel)\s*\)*\s*$", re.IGNORECASE), _PACKAGING_REEL, None),
-    (re.compile(r"(?:^|[-_/ (,.<>]+)tube\s*\)*\s*$", re.IGNORECASE), _PACKAGING_TUBE, None),
-    (re.compile(r"(?:^|[-_/ (,.<>]+)bulk\s*\)*\s*$", re.IGNORECASE), _PACKAGING_BULK, None),
+    (re.compile(r"(?:^|[-_/ (,.<>])cut[\s-]?tape\s*\)*\s*$", re.IGNORECASE), _PACKAGING_CUT_TAPE, None),
+    (re.compile(r"(?:^|[-_/ (,.<>])tape[\s-]*(?:&|and)[\s-]*reel\s*\)*\s*$", re.IGNORECASE), _PACKAGING_TAPE_AND_REEL, None),
+    (re.compile(r"(?:^|[-_/ (,.<>])(?:t&r|reel)\s*\)*\s*$", re.IGNORECASE), _PACKAGING_REEL, None),
+    (re.compile(r"(?:^|[-_/ (,.<>])tube\s*\)*\s*$", re.IGNORECASE), _PACKAGING_TUBE, None),
+    (re.compile(r"(?:^|[-_/ (,.<>])bulk\s*\)*\s*$", re.IGNORECASE), _PACKAGING_BULK, None),
 ]
 
 
@@ -106,8 +106,10 @@ def _strip(text: str) -> Tuple[str, Optional[str], Optional[int]]:
         return text, None, None
     match = _matches(text)
     if match is None:
+        # No packaging marker: collapse whitespace only, never mutate the
+        # remaining characters (the docstring contract is "unchanged when
+        # nothing matched").
         cleaned = re.sub(r"\s+", " ", text).strip()
-        cleaned = cleaned.rstrip(" (_,./;-")
         return cleaned, None, None
 
     start, _, packaging, qty = match
