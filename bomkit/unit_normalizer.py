@@ -174,8 +174,9 @@ class UnitNormalizer:
         prefix_map = {
             'p': 1e-12,  # pico
             'n': 1e-9,   # nano
-            'u': 1e-06,   # micro (explicit format for Issue 6 precision)
-            'µ': 1e-06,   # micro (unicode)
+            'u': 1e-6,   # micro
+            'µ': 1e-6,   # micro (micro sign U+00B5)
+            'μ': 1e-6,   # micro (greek mu U+03BC)
             'm': 1e-3,   # milli
             'k': 1e3,    # kilo
             'M': 1e6,    # mega
@@ -201,7 +202,7 @@ class UnitNormalizer:
         
         # Heuristic: if value is small (< 1 with prefix), likely capacitance
         # If value is large (> 100 with prefix), likely resistance
-        if unit_str_lower in ['p', 'n', 'u', 'µ', 'm']:
+        if unit_str_lower in ['p', 'n', 'u', 'µ', 'μ', 'm']:
             if is_inductor:
                 normalized_value = num_value * multiplier
                 return normalized_value, 'H'
