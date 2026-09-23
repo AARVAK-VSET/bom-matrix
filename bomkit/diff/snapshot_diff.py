@@ -40,6 +40,7 @@ class SnapshotItemState:
     attributes: Dict[str, Any]
     checksum: str
     part_id: Optional[UUID] = None  # Part ID for semantic matching
+    assembly_path: Optional[str] = None
 
 
 @dataclass
@@ -64,6 +65,7 @@ class ModifiedItem:
     """
     bom_item_id: UUID
     changes: List[FieldChange]
+    assembly_path: Optional[str] = None
 
 
 @dataclass
@@ -129,6 +131,8 @@ def _create_part_based_key(part_id: Optional[UUID]) -> str:
     return str(part_id) if part_id else "NO_PART"
 
 
+
+
 def fetch_snapshot_state(
     db: DatabaseClient,
     snapshot_id: UUID,
@@ -136,23 +140,23 @@ def fetch_snapshot_state(
 ) -> Dict[UUID, SnapshotItemState]:
     """
     Fetch all snapshot items for a snapshot and represent as identity-keyed dict.
-    
+
     This is Step 1: Load snapshot state into memory.
     Uses SQL only to retrieve data, not to "diff meaning".
-    
+
     NOTE: snapshot_items.attributes now includes reference_designator
     (moved from bom_items.context to ensure refdes changes show as MODIFY).
-    
+
     Args:
         db: Database client
         snapshot_id: Snapshot ID to fetch
         bom_item_details: Optional pre-fetched bom_item details dict (for performance)
-        
+
     Returns:
         Dictionary mapping bom_item_id -> SnapshotItemState
     """
     snapshot_items = db.get_snapshot_items(snapshot_id)
-    
+
     # If bom_item_details not provided, fetch them
     if bom_item_details is None:
         bom_item_ids = [UUID(item['bom_item_id']) for item in snapshot_items]
@@ -160,19 +164,22 @@ def fetch_snapshot_state(
             bom_item_details = db.get_bom_item_details(bom_item_ids)
         else:
             bom_item_details = {}
-    
+
     state = {}
+
     for item in snapshot_items:
         bom_item_id = UUID(item['bom_item_id'])
-        
+
         # Get part_id from bom_item_details
         details = bom_item_details.get(bom_item_id, {})
         part_id = details.get('part_id')
+
         if part_id:
             part_id = UUID(part_id) if isinstance(part_id, str) else part_id
-        
+
         # Handle quantity conversion (DB may return numeric as Decimal, int, or float)
         quantity = item['quantity']
+
         if quantity is not None:
             # Convert to numeric type (preserve int if possible, else float)
             if isinstance(quantity, (int, float)):
@@ -180,17 +187,84 @@ def fetch_snapshot_state(
             else:
                 # Handle Decimal or string
                 quantity = float(quantity)
-        
+
         state[bom_item_id] = SnapshotItemState(
             bom_item_id=bom_item_id,
             quantity=quantity,
             attributes=item['attributes'] or {},
             checksum=item['checksum'],
-            part_id=part_id
+            part_id=part_id,
+            assembly_path=None
         )
-    
-    return state
 
+    # Pre-computation for assembly paths and effective quantities
+
+    # 1. Map part_name -> bom_item_id for items in this snapshot
+    part_to_item = {}
+
+    for item_id, item_state in state.items():
+        details = bom_item_details.get(item_id, {})
+        part_name = details.get('part_name')
+
+        if part_name:
+            part_to_item[part_name] = item_id
+
+    # 2. Compute path and effective quantity recursively
+    def get_path_and_qty(item_id, visited=None):
+        if visited is None:
+            visited = set()
+
+        if item_id in visited:
+            return "CYCLE", state[item_id].quantity or 1.0
+
+        visited.add(item_id)
+
+        details = bom_item_details.get(item_id, {})
+
+        assembly_name = details.get('assembly_name')
+        part_name = details.get('part_name', 'UNKNOWN')
+
+        my_qty = state[item_id].quantity
+
+        if my_qty is None:
+            my_qty = 1.0
+
+        parent_id = (
+            part_to_item.get(assembly_name)
+            if assembly_name
+            else None
+        )
+
+        if parent_id and parent_id in state:
+            parent_path, parent_qty = get_path_and_qty(
+                parent_id,
+                visited
+            )
+
+            path = f"{parent_path}/{part_name}"
+            eff_qty = float(my_qty) * float(parent_qty)
+
+        else:
+            path = (
+                f"{assembly_name}/{part_name}"
+                if assembly_name
+                else part_name
+            )
+
+            eff_qty = float(my_qty)
+
+        visited.remove(item_id)
+
+        return path, eff_qty
+
+    # Calculate hierarchy information for every item
+    for item_id, item_state in state.items():
+        path, eff_qty = get_path_and_qty(item_id)
+
+        item_state.assembly_path = path
+        item_state.quantity = eff_qty
+
+    return state
 
 def diff_snapshot_item(
     a: SnapshotItemState,
@@ -452,9 +526,10 @@ def diff_snapshots(
             if changes:
                 # Use bom_item_id from snapshot B (the newer one)
                 modified_items.append(ModifiedItem(
-                    bom_item_id=bom_item_id_b,
-                    changes=changes
-                ))
+    bom_item_id=bom_item_id_b,
+    changes=changes,
+    assembly_path=state_b_item.assembly_path
+))
     
     # Step 8: Calculate unchanged count
     # Only items with matching checksums are truly unchanged

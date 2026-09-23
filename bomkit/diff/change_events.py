@@ -121,6 +121,7 @@ class ItemDelta:
     """
     bom_item_id: UUID
     part_id: Optional[UUID] = None
+    assembly_path: Optional[str] = None
     
     # Existence flags (mutually exclusive)
     added: bool = False           # Item only exists in snapshot B
@@ -340,7 +341,8 @@ def _compute_item_delta_from_modified(modified: ModifiedItem) -> ItemDelta:
     """
     delta = ItemDelta(
         bom_item_id=modified.bom_item_id,
-        field_changes=modified.changes
+        field_changes=modified.changes,
+        assembly_path=getattr(modified, "assembly_path", None)
     )
     
     for change in modified.changes:
