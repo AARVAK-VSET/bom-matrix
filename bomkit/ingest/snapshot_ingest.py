@@ -338,6 +338,15 @@ class DatabaseClient:
         """
         raise NotImplementedError
     
+    def delete_snapshot(self, snapshot_id: UUID) -> None:
+        """
+        Delete a snapshot and its associated snapshot items.
+
+        Args:
+            snapshot_id: Snapshot UUID to delete
+        """
+        raise NotImplementedError
+
     def begin_transaction(self) -> None:
         """Begin a database transaction."""
         raise NotImplementedError
@@ -883,6 +892,7 @@ def ingest_bom_snapshot(
     
     # Begin transaction for atomicity
     db.begin_transaction()
+    snapshot_id = None
     
     try:
         # ========================================================================
@@ -1049,5 +1059,18 @@ def ingest_bom_snapshot(
     except Exception as e:
         # Rollback on any error
         db.rollback_transaction()
+
+        # If the snapshot header was already created, explicitly clean it up.
+        # This prevents an orphaned snapshot when snapshot item insertion fails.
+        if snapshot_id is not None:
+            try:
+                db.delete_snapshot(snapshot_id)
+            except Exception as cleanup_error:
+                # Preserve the original ingestion exception if cleanup fails.
+                logger.error(
+                    f"Failed to cleanup snapshot {snapshot_id}: {cleanup_error}",
+                    exc_info=True
+                )
+
         logger.error(f"BOM snapshot ingestion failed: {e}", exc_info=True)
         raise
