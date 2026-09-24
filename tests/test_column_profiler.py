@@ -273,6 +273,18 @@ if __name__ == "__main__":
     print("All column profiler tests completed!")
     print("="*60 + "\n")
 
+def test_regex_patterns_ignore_trailing_whitespace():
+    profiler = ColumnProfiler()
+
+    result = profiler._check_regex_patterns([
+        "ABC123 ",
+        "ABC456\t",
+        "R1 ",
+        "C2\t",
+    ])
+
+    assert result["mpn_like"] == 0.5
+    assert result["ref_des_like"] == 0.5
 
 
 

@@ -184,6 +184,7 @@ class ColumnProfiler:
         ref_des_matches = 0
         
         for value in values:
+            value=str(value).strip()
             # Check MPN patterns
             for pattern in self.MPN_PATTERNS:
                 if re.match(pattern, value):
