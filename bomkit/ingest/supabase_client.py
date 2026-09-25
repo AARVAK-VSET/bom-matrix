@@ -25,7 +25,7 @@ import os
 from typing import Optional, Dict, Any, List, Tuple
 from uuid import UUID, uuid4
 import psycopg2
-from psycopg2.extras import RealDictCursor, Json
+from psycopg2.extras import RealDictCursor, Json, execute_values
 from psycopg2.pool import SimpleConnectionPool
 from difflib import SequenceMatcher
 
@@ -586,6 +586,45 @@ class SupabaseClient(DatabaseClient):
                     checksum = EXCLUDED.checksum
             """, (str(snapshot_id), str(bom_item_id), quantity, Json(attributes), checksum))
 
+        finally:
+            cursor.close()
+
+    def insert_snapshot_items(
+        self,
+        snapshot_id: UUID,
+        items: List[Tuple[UUID, Optional[int], Dict[str, Any], str]],
+    ) -> None:
+        """Insert a batch of snapshot items in one database round trip."""
+        if not items:
+            return
+
+        # Keep the existing single-row behavior for duplicate BOM items: the
+        # last row in the input wins when the same key occurs in one batch.
+        unique_items = {}
+        for bom_item_id, quantity, attributes, checksum in items:
+            unique_items[bom_item_id] = (quantity, attributes, checksum)
+
+        values = [
+            (str(snapshot_id), str(bom_item_id), quantity, Json(attributes), checksum)
+            for bom_item_id, (quantity, attributes, checksum) in unique_items.items()
+        ]
+        cursor = self._get_cursor(dict_cursor=False)
+
+        try:
+            execute_values(
+                cursor,
+                """
+                INSERT INTO bom_snapshot_items (snapshot_id, bom_item_id, quantity, attributes, checksum)
+                VALUES %s
+                ON CONFLICT (snapshot_id, bom_item_id)
+                DO UPDATE SET
+                    quantity = EXCLUDED.quantity,
+                    attributes = EXCLUDED.attributes,
+                    checksum = EXCLUDED.checksum
+                """,
+                values,
+                template="(%s, %s, %s, %s::jsonb, %s)",
+            )
         finally:
             cursor.close()
 

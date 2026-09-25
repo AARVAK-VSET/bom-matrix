@@ -337,6 +337,25 @@ class DatabaseClient:
             checksum: Deterministic checksum of quantity + attributes
         """
         raise NotImplementedError
+
+    def insert_snapshot_items(
+        self,
+        snapshot_id: UUID,
+        items: List[Tuple[UUID, Optional[int], Dict[str, Any], str]],
+    ) -> None:
+        """Insert multiple snapshot items in one database operation.
+
+        The default implementation preserves compatibility with database clients
+        that only implement the single-item method.
+        """
+        for bom_item_id, quantity, attributes, checksum in items:
+            self.insert_snapshot_item(
+                snapshot_id=snapshot_id,
+                bom_item_id=bom_item_id,
+                quantity=quantity,
+                attributes=attributes,
+                checksum=checksum,
+            )
     
     def begin_transaction(self) -> None:
         """Begin a database transaction."""
@@ -804,7 +823,8 @@ def ingest_bom_snapshot(
     assembly_id: Optional[UUID] = None,
     assembly_name: Optional[str] = None,
     parent_snapshot_id: Optional[UUID] = None,
-    debug: bool = False
+    debug: bool = False,
+    batch_size: int = 500
 ) -> UUID:
     """
     Ingest a BOM snapshot into the database.
@@ -866,6 +886,9 @@ def ingest_bom_snapshot(
     """
     if not rows:
         raise ValueError("Cannot ingest empty BOM snapshot")
+
+    if batch_size <= 0:
+        raise ValueError("batch_size must be greater than zero")
     
     # Validate that exactly one of assembly_id or assembly_name is provided
     if assembly_id is None and assembly_name is None:
@@ -992,6 +1015,7 @@ def ingest_bom_snapshot(
         # represent the same usage and should be treated as one bom_item.
         
         created_count = 0
+        pending_items = []
         bom_item_seen = {}  # Track bom_item_id -> first row for duplicate detection
         
         for bom_item_id, row in bom_item_mappings:
@@ -1020,17 +1044,17 @@ def ingest_bom_snapshot(
             else:
                 bom_item_seen[bom_item_id] = row
             
-            # Insert snapshot_item (or update if duplicate)
-            # ON CONFLICT ensures we don't fail on duplicates
-            db.insert_snapshot_item(
-                snapshot_id=snapshot_id,
-                bom_item_id=bom_item_id,
-                quantity=row.quantity,
-                attributes=snapshot_attributes,
-                checksum=checksum
-            )
-            
+            pending_items.append((bom_item_id, row.quantity, snapshot_attributes, checksum))
             created_count += 1
+
+        for batch_start in range(0, len(pending_items), batch_size):
+            batch = pending_items[batch_start:batch_start + batch_size]
+            db.insert_snapshot_items(snapshot_id=snapshot_id, items=batch)
+            if debug:
+                logger.info(
+                    f"Snapshot item batch inserted: {len(batch)} items "
+                    f"({batch_start + len(batch)}/{len(pending_items)})"
+                )
         
         if debug:
             logger.info(
