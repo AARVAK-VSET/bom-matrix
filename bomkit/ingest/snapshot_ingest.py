@@ -179,7 +179,7 @@ class DatabaseClient:
             Organization UUID (existing or newly created)
         """
         raise NotImplementedError
-    
+
     def get_assembly_by_id(
         self,
         org_id: UUID,
@@ -199,7 +199,7 @@ class DatabaseClient:
             ValueError: If assembly doesn't exist or doesn't belong to org
         """
         raise NotImplementedError
-    
+
     def get_or_create_assembly(
         self, 
         org_id: UUID, 
@@ -376,7 +376,7 @@ class DatabaseClient:
                 this method must not attempt partial recovery itself.
         """
         raise NotImplementedError
-    
+
     def begin_transaction(self) -> None:
         """Begin a database transaction."""
         raise NotImplementedError
@@ -1091,7 +1091,6 @@ def ingest_bom_snapshot(
                     )
             else:
                 bom_item_seen[bom_item_id] = row
-
             # Stage snapshot_item for batch insert (or update if duplicate)
             # ON CONFLICT (applied per-batch) ensures we don't fail on duplicates
             pending_batch.append({
@@ -1109,7 +1108,6 @@ def ingest_bom_snapshot(
 
         # Flush whatever's left (partial final batch, or everything if total < batch_size)
         _flush_batch(pending_batch, batch_index)
-
         if debug:
             logger.info(
                 f"Snapshot items inserted: {created_count} items "
@@ -1118,12 +1116,12 @@ def ingest_bom_snapshot(
         
         # Commit transaction
         db.commit_transaction()
-        
+
         if debug:
             logger.info(f"Ingestion complete: snapshot {snapshot_id}")
         
         return snapshot_id
-        
+
     except Exception as e:
         # Rollback on any error
         db.rollback_transaction()
