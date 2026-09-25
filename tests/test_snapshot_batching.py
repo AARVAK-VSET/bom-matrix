@@ -23,7 +23,7 @@ class RecordingDatabase:
     def create_snapshot(self, org_id, assembly_id, source, parent_snapshot_id=None):
         return uuid4()
 
-    def insert_snapshot_items(self, snapshot_id, items):
+    def insert_snapshot_items_batch(self, snapshot_id, items):
         self.batches.append((snapshot_id, items))
 
     def commit_transaction(self):

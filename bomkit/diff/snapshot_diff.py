@@ -40,6 +40,7 @@ class SnapshotItemState:
     attributes: Dict[str, Any]
     checksum: str
     part_id: Optional[UUID] = None  # Part ID for semantic matching
+    assembly_path: Optional[str] = None  # Full hierarchical path
 
 
 @dataclass
@@ -64,6 +65,7 @@ class ModifiedItem:
     """
     bom_item_id: UUID
     changes: List[FieldChange]
+    assembly_path: Optional[str] = None
 
 
 @dataclass
@@ -102,6 +104,10 @@ def _create_semantic_key(part_id: Optional[UUID], quantity: Optional[Union[int, 
     """
     # Filter to semantic attributes only
     semantic_attrs = _filter_semantic_attributes(attributes)
+    if "manufacturer_part_number" in semantic_attrs:
+        semantic_attrs["manufacturer_part_number"] = str(
+            semantic_attrs["manufacturer_part_number"]
+        ).upper()
     
     # Create a stable representation
     key_parts = [
@@ -189,7 +195,59 @@ def fetch_snapshot_state(
             part_id=part_id
         )
     
+    # Pre-computation for assembly paths and effective quantities
+    # 1. Map part_name -> bom_item_id for items in this snapshot
+    part_to_item = {}
+    for item_id, item_state in state.items():
+        details = bom_item_details.get(item_id, {})
+        part_name = details.get('part_name')
+        if part_name:
+            part_to_item[part_name] = item_id
+
+    # 2. Compute path and effective quantity recursively
+    def get_path_and_qty(item_id, visited=None):
+        if visited is None:
+            visited = set()
+        if item_id in visited:
+            return "CYCLE", state[item_id].quantity or 1.0
+        visited.add(item_id)
+        
+        details = bom_item_details.get(item_id, {})
+        assembly_name = details.get('assembly_name')
+        part_name = details.get('part_name', 'UNKNOWN')
+        my_qty = state[item_id].quantity
+        if my_qty is None:
+            my_qty = 1.0
+            
+        parent_id = part_to_item.get(assembly_name) if assembly_name else None
+        if parent_id and parent_id in state:
+            parent_path, parent_qty = get_path_and_qty(parent_id, visited)
+            path = f"{parent_path}/{part_name}"
+            eff_qty = float(my_qty) * float(parent_qty)
+        else:
+            path = f"{assembly_name}/{part_name}" if assembly_name else part_name
+            eff_qty = float(my_qty)
+            
+        visited.remove(item_id)
+        return path, eff_qty
+
+    for item_id, item_state in state.items():
+        path, eff_qty = get_path_and_qty(item_id)
+        item_state.assembly_path = path
+        item_state.quantity = eff_qty
+    
     return state
+
+def _normalize_refdes_for_comparison(value: Any) -> Any:
+    """Normalize reference designators for order-insensitive comparison."""
+    if not isinstance(value, str):
+        return value
+
+    return {
+        token.strip()
+        for token in value.split(",")
+        if token.strip()
+    }
 
 
 def diff_snapshot_item(
@@ -234,7 +292,11 @@ def diff_snapshot_item(
     for key in all_keys:
         val_a = attrs_a.get(key)
         val_b = attrs_b.get(key)
-        
+
+        if key in {"reference_designator", "refdes", "designator"}:
+            val_a = _normalize_refdes_for_comparison(val_a)
+            val_b = _normalize_refdes_for_comparison(val_b)
+
         if val_a != val_b:
             if key not in attrs_a:
                 # Attribute was added
@@ -453,7 +515,8 @@ def diff_snapshots(
                 # Use bom_item_id from snapshot B (the newer one)
                 modified_items.append(ModifiedItem(
                     bom_item_id=bom_item_id_b,
-                    changes=changes
+                    changes=changes,
+                    assembly_path=state_b_item.assembly_path
                 ))
     
     # Step 8: Calculate unchanged count

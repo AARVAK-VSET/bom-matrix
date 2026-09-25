@@ -588,33 +588,42 @@ class SupabaseClient(DatabaseClient):
 
         finally:
             cursor.close()
-
-    def insert_snapshot_items(
+            
+    def insert_snapshot_items_batch(
         self,
         snapshot_id: UUID,
-        items: List[Tuple[UUID, Optional[int], Dict[str, Any], str]],
+        items: List[Dict[str, Any]]
     ) -> None:
-        """Insert a batch of snapshot items in one database round trip."""
+        """
+        Bulk-insert snapshot_items using a single multi-row INSERT.
+
+        Uses execute_values so the whole batch is one round trip instead of
+        one INSERT per item. Same ON CONFLICT semantics as
+        insert_snapshot_item: a conflicting (snapshot_id, bom_item_id) pair
+        is updated in place rather than causing a failure.
+        """
         if not items:
             return
 
-        # Keep the existing single-row behavior for duplicate BOM items: the
-        # last row in the input wins when the same key occurs in one batch.
-        unique_items = {}
-        for bom_item_id, quantity, attributes, checksum in items:
-            unique_items[bom_item_id] = (quantity, attributes, checksum)
-
-        values = [
-            (str(snapshot_id), str(bom_item_id), quantity, Json(attributes), checksum)
-            for bom_item_id, (quantity, attributes, checksum) in unique_items.items()
-        ]
-        cursor = self._get_cursor(dict_cursor=False)
+        cursor = self._get_cursor()
 
         try:
+            values = [
+                (
+                    str(snapshot_id),
+                    str(item['bom_item_id']),
+                    item['quantity'],
+                    Json(item['attributes']),
+                    item['checksum'],
+                )
+                for item in items
+            ]
+
             execute_values(
                 cursor,
                 """
-                INSERT INTO bom_snapshot_items (snapshot_id, bom_item_id, quantity, attributes, checksum)
+                INSERT INTO bom_snapshot_items
+                    (snapshot_id, bom_item_id, quantity, attributes, checksum)
                 VALUES %s
                 ON CONFLICT (snapshot_id, bom_item_id)
                 DO UPDATE SET
@@ -623,8 +632,9 @@ class SupabaseClient(DatabaseClient):
                     checksum = EXCLUDED.checksum
                 """,
                 values,
-                template="(%s, %s, %s, %s::jsonb, %s)",
+                template="(%s, %s, %s, %s::jsonb, %s)"
             )
+
         finally:
             cursor.close()
 

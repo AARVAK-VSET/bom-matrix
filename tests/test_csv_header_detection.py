@@ -44,3 +44,93 @@ def test_normalization_of_bom_4():
     assert first["quantity"] == "3"
     assert first["value"] == "10n"
     assert first["package"]
+
+def test_excel_adapter_detects_bom_sheet():
+    """Ensure Excel adapter selects the BOM sheet instead of the active sheet."""
+    from bomkit.adapters.excel_adapter import ExcelAdapter
+    import openpyxl
+
+    test_file = Path(__file__).parent / "multi_sheet_bom.xlsx"
+
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "Instructions"
+
+    ws1.append(["This is not a BOM"])
+    ws1.append(["Some notes"])
+
+    ws2 = wb.create_sheet("BOM")
+    ws2.append(["Part Number", "Quantity", "Value"])
+    ws2.append(["R1", 2, "10k"])
+
+    wb.save(test_file)
+
+    try:
+        rows = ExcelAdapter().read(str(test_file))
+
+        assert rows
+        assert rows[0]["Part Number"] == "R1"
+        assert rows[0]["Quantity"] == 2
+        assert rows[0]["Value"] == "10k"
+    finally:
+        test_file.unlink(missing_ok=True)
+def test_utf8_encoding_uses_sig(tmp_path):
+    """Ensure UTF-8 CSV files use BOM-safe UTF-8 decoding."""
+    csv_file = tmp_path / "test_utf8_encoding.csv"
+
+    csv_file.write_text(
+        "Item,Quantity\nCafé,2\n",
+        encoding="utf-8"
+    )
+
+    adapter = CsvAdapter()
+
+    assert adapter._detect_encoding(str(csv_file)) == "utf-8-sig"
+    
+
+def test_obfuscated_header_row_is_not_leaked_as_data(tmp_path):
+    """A cryptic header row (e.g. Column1,Column2,Column3) must be used as
+    the header rather than leaking into the data rows."""
+    csv_file = tmp_path / "obfuscated.csv"
+    values = [
+        "STM32F401RCT6", "STM32F103C8T6", "ATmega328P", "ESP32-WROOM-32",
+        "RC0603FR-0710KL", "LM358", "1N4148", "2N3904", "MAX232", "74LS138",
+    ]
+    with open(csv_file, "w", newline="") as f:
+        f.write("Column1,Column2,Column3\n")
+        for i, value in enumerate(values):
+            f.write(f"{value},{i + 1},R{i + 1}\n")
+
+    parser = BomParser(normalize=True)
+    parser.register_adapter(CsvAdapter())
+
+    rows = parser.parse(str(csv_file))
+    assert len(rows) == 10
+    assert all(row["manufacturer_part_number"] in values for row in rows)
+    assert all(str(row["reference_designator"]).startswith("R") for row in rows)
+
+def test_multiline_quoted_csv_field():
+    """Ensure quoted multiline fields remain a single logical record."""
+    from bomkit.adapters.csv_adapter import CsvAdapter
+
+    csv_file = Path(__file__).parent / "multiline_test.csv"
+
+    csv_file.write_text(
+        'part_number,description,quantity\n'
+        "P001,'Water sensor\n"
+        "with temperature probe',2\n"
+        "P002,'Pressure sensor',1\n",
+        encoding="utf-8",
+    )
+
+    try:
+        adapter = CsvAdapter()
+        rows = adapter.read(str(csv_file))
+
+        assert len(rows) == 2
+        assert rows[0]["part_number"] == "P001"
+        assert rows[0]["description"] == "Water sensor\r\nwith temperature probe"
+        assert rows[0]["quantity"] == "2"
+        assert rows[1]["part_number"] == "P002"
+    finally:
+        csv_file.unlink(missing_ok=True)

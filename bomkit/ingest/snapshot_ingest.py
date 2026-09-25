@@ -179,7 +179,7 @@ class DatabaseClient:
             Organization UUID (existing or newly created)
         """
         raise NotImplementedError
-    
+
     def get_assembly_by_id(
         self,
         org_id: UUID,
@@ -199,7 +199,7 @@ class DatabaseClient:
             ValueError: If assembly doesn't exist or doesn't belong to org
         """
         raise NotImplementedError
-    
+
     def get_or_create_assembly(
         self, 
         org_id: UUID, 
@@ -318,6 +318,15 @@ class DatabaseClient:
         """
         raise NotImplementedError
     
+    def delete_snapshot(self, snapshot_id: UUID) -> None:
+        """
+        Delete a snapshot and all its items (compensating transaction).
+        
+        Args:
+            snapshot_id: Snapshot ID
+        """
+        raise NotImplementedError
+    
     def insert_snapshot_item(
         self,
         snapshot_id: UUID,
@@ -336,27 +345,38 @@ class DatabaseClient:
             attributes: Snapshot-local attributes (temporary notes, row_index, etc.)
             checksum: Deterministic checksum of quantity + attributes
         """
+
         raise NotImplementedError
 
-    def insert_snapshot_items(
+    def insert_snapshot_items_batch(
         self,
         snapshot_id: UUID,
-        items: List[Tuple[UUID, Optional[int], Dict[str, Any], str]],
+        items: List[Dict[str, Any]]
     ) -> None:
-        """Insert multiple snapshot items in one database operation.
-
-        The default implementation preserves compatibility with database clients
-        that only implement the single-item method.
         """
-        for bom_item_id, quantity, attributes, checksum in items:
-            self.insert_snapshot_item(
-                snapshot_id=snapshot_id,
-                bom_item_id=bom_item_id,
-                quantity=quantity,
-                attributes=attributes,
-                checksum=checksum,
-            )
-    
+        Bulk-insert multiple snapshot_items in a single round trip.
+
+        This exists so large BOMs (1000+ rows) don't require one round trip
+        per row. Implementations should insert `items` as one multi-row
+        operation, using the same ON CONFLICT semantics as
+        insert_snapshot_item (update in place on (snapshot_id, bom_item_id)
+        conflict).
+
+        Args:
+            snapshot_id: Snapshot ID (shared by every item in this batch)
+            items: List of dicts, each with keys:
+                - bom_item_id (UUID)
+                - quantity (Optional[int])
+                - attributes (Dict[str, Any])
+                - checksum (str)
+
+        Raises:
+            Exception: If the batch insert fails. The caller (ingest_bom_snapshot)
+                is responsible for rolling back the enclosing transaction —
+                this method must not attempt partial recovery itself.
+        """
+        raise NotImplementedError
+
     def begin_transaction(self) -> None:
         """Begin a database transaction."""
         raise NotImplementedError
@@ -823,8 +843,8 @@ def ingest_bom_snapshot(
     assembly_id: Optional[UUID] = None,
     assembly_name: Optional[str] = None,
     parent_snapshot_id: Optional[UUID] = None,
-    debug: bool = False,
-    batch_size: int = 500
+    batch_size: int = 500,
+    debug: bool = False
 ) -> UUID:
     """
     Ingest a BOM snapshot into the database.
@@ -858,6 +878,10 @@ def ingest_bom_snapshot(
         assembly_name: Name of new assembly to create (for creating new BOM)
                       Mutually exclusive with assembly_id
         parent_snapshot_id: Optional parent snapshot for lineage tracking
+        batch_size: Number of snapshot_items to insert per database round
+                   trip. Must be >= 1. Default 500. Tune down if you hit
+                   payload/parameter limits on your database backend, tune
+                   up for fewer round trips on fast local connections.
         debug: Enable debug logging of identity resolution decisions
         
     Returns:
@@ -887,8 +911,8 @@ def ingest_bom_snapshot(
     if not rows:
         raise ValueError("Cannot ingest empty BOM snapshot")
 
-    if batch_size <= 0:
-        raise ValueError("batch_size must be greater than zero")
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
     
     # Validate that exactly one of assembly_id or assembly_name is provided
     if assembly_id is None and assembly_name is None:
@@ -1015,20 +1039,44 @@ def ingest_bom_snapshot(
         # represent the same usage and should be treated as one bom_item.
         
         created_count = 0
-        pending_items = []
         bom_item_seen = {}  # Track bom_item_id -> first row for duplicate detection
-        
+
+        pending_batch: List[Dict[str, Any]] = []
+        batch_results = []  # (batch_index, item_count) for successfully flushed batches
+        batch_index = 0
+
+        def _flush_batch(items: List[Dict[str, Any]], index: int) -> None:
+            if not items:
+                return
+            try:
+                db.insert_snapshot_items_batch(snapshot_id=snapshot_id, items=items)
+            except Exception as e:
+                # Aggregate context about what succeeded before this batch failed,
+                # then re-raise so the outer except block rolls back the whole
+                # transaction. We deliberately do NOT try to salvage a partial
+                # commit here — snapshots must stay atomic (see module docstring).
+                succeeded_so_far = sum(count for _, count in batch_results)
+                raise RuntimeError(
+                    f"Batch {index} failed after {len(batch_results)} batch(es) "
+                    f"({succeeded_so_far} items) succeeded in this transaction "
+                    f"(not yet committed — will be rolled back). "
+                    f"Batch {index} had {len(items)} items. Root cause: {e}"
+                ) from e
+            batch_results.append((index, len(items)))
+            if debug:
+                logger.info(f"Batch {index} inserted: {len(items)} items")
+
         for bom_item_id, row in bom_item_mappings:
             # Extract snapshot-local attributes (row_index, reference_designator, etc.)
             snapshot_attributes = _extract_snapshot_attributes(row)
-            
+
             # Compute deterministic checksum
             # This allows detecting changes between snapshots
             checksum = _compute_checksum(
                 quantity=row.quantity,
                 attributes=snapshot_attributes
             )
-            
+
             # Check if we've already seen this bom_item_id in this snapshot
             if bom_item_id in bom_item_seen:
                 # Same bom_item appears again - this means multiple rows resolved
@@ -1043,19 +1091,23 @@ def ingest_bom_snapshot(
                     )
             else:
                 bom_item_seen[bom_item_id] = row
-            
-            pending_items.append((bom_item_id, row.quantity, snapshot_attributes, checksum))
+            # Stage snapshot_item for batch insert (or update if duplicate)
+            # ON CONFLICT (applied per-batch) ensures we don't fail on duplicates
+            pending_batch.append({
+                'bom_item_id': bom_item_id,
+                'quantity': row.quantity,
+                'attributes': snapshot_attributes,
+                'checksum': checksum,
+            })
             created_count += 1
 
-        for batch_start in range(0, len(pending_items), batch_size):
-            batch = pending_items[batch_start:batch_start + batch_size]
-            db.insert_snapshot_items(snapshot_id=snapshot_id, items=batch)
-            if debug:
-                logger.info(
-                    f"Snapshot item batch inserted: {len(batch)} items "
-                    f"({batch_start + len(batch)}/{len(pending_items)})"
-                )
-        
+            if len(pending_batch) >= batch_size:
+                _flush_batch(pending_batch, batch_index)
+                batch_index += 1
+                pending_batch = []
+
+        # Flush whatever's left (partial final batch, or everything if total < batch_size)
+        _flush_batch(pending_batch, batch_index)
         if debug:
             logger.info(
                 f"Snapshot items inserted: {created_count} items "
@@ -1064,14 +1116,22 @@ def ingest_bom_snapshot(
         
         # Commit transaction
         db.commit_transaction()
-        
+
         if debug:
             logger.info(f"Ingestion complete: snapshot {snapshot_id}")
         
         return snapshot_id
-        
+
     except Exception as e:
         # Rollback on any error
         db.rollback_transaction()
+        
+        # Compensating transaction for databases without transaction support
+        if 'snapshot_id' in locals() and snapshot_id is not None:
+            try:
+                db.delete_snapshot(snapshot_id)
+            except Exception as cleanup_err:
+                logger.error(f"Failed to cleanup partial snapshot {snapshot_id}: {cleanup_err}")
+                
         logger.error(f"BOM snapshot ingestion failed: {e}", exc_info=True)
         raise

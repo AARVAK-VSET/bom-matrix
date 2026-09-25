@@ -6,6 +6,52 @@ from .column_profiler import ColumnProfiler
 from .lexical_similarity import LexicalSimilarity
 from .schema import STANDARD_HEADERS, COLUMN_MAPPINGS, CANONICAL_FIELDS
 
+# Weights applied to the header lexical score and the content value-profile
+# score when both signals are available. Each contributes up to its weight;
+# the combined confidence is capped at 1.0 so a strong header and strong
+# content corroborate each other.
+NAME_WEIGHT = 0.6
+CONTENT_WEIGHT = 0.6
+
+# Headers whose lexical score is below this are treated as empty or
+# obfuscated; for such headers the content value profile governs because
+# blending a weak name score would only dilute strong content evidence.
+UNINFORMATIVE_HEADER_SCORE = 0.5
+
+# Minimum composite confidence required to classify a column.
+CLASSIFICATION_THRESHOLD = 0.85
+
+# Short role labels returned alongside the canonical field ids.
+_ROLE_LABELS = {
+    "manufacturer_part_number": "mpn",
+}
+
+# Structured value patterns that a permissive MPN regex would otherwise
+# mistake for part numbers: package footprints, dates, phone numbers and
+# pure hex codes. Used to guard the content value-profile, not the header
+# lexical scoring.
+_FOOTPRINT_PATTERN = re.compile(
+    r"^(?:\d{4}|(?:SOT|DIP|SOP|SOIC|QFN|QFP|LQFP|TSSOP|TSOP|SOD|TO|BGA|CSP|PLCC|TQFP|DFN|MSOP|WSON|PQFP|LFPAK)[- ]\d{1,3}[A-Z0-9-]*)$",
+    re.IGNORECASE,
+)
+_DATE_PATTERN = re.compile(r"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$")
+_PHONE_PATTERN = re.compile(r"^\+?\d[\d\s.()\-]{5,17}\d$")
+_HEX_PATTERN = re.compile(r"^[0-9A-Fa-f]{6}$")
+
+# Common manufacturer or distributor names used to recognise vendor columns
+# from content alone. Deliberately long/distinctive tokens so ordinary
+# description prose does not collide with them.
+_VENDOR_TOKENS = (
+    "texas instruments", "stmicroelectronics", "analog devices", "microchip",
+    "infineon", "nxp", "vishay", "rohm", "murata", "panasonic", "renesas",
+    "on semiconductor", "onsemi", "toshiba", "fairchild", "maxim", "littelfuse",
+    "wurth", "kemet", "tdk", "yageo", "avx", "nichicon", "epcos",
+    "te connectivity", "amphenol", "molex", "harting", "phoenix contact",
+    "omron", "schneider", "siemens", "samsung", "skyworks", "qorvo",
+    "broadcom", "qualcomm", "digi-key", "mouser", "arrow", "avnet",
+    "rs components", "farnell", "newark", "conrad", "anglia", "element14",
+)
+
 
 class BomNormalizer:
     """Normalizer for standardizing Bill of Materials data.
@@ -259,7 +305,282 @@ class BomNormalizer:
             if any(key in col_lower for key in ["revision", "rev"]):
                 score -= 0.6
 
+        authoritative_abbreviations = {
+            "qty": "quantity",
+            "desc": "description",
+            "mfr pn": "manufacturer_part_number",
+            "mpn": "manufacturer_part_number",
+            "ref": "reference_designator",
+            "value": "value",
+            "designator": "reference_designator"
+        }
+        normalized_col = self._normalize_header_text(column_name)
+        if authoritative_abbreviations.get(normalized_col) == field_id:
+            score = max(score, 0.95)
+
         return score
+
+    def _name_score(self, column_name: str, field_id: str, name_based: Optional[str]) -> float:
+        """Score how well a column header lexically matches a canonical field.
+
+        Returns:
+            Normalized header score in [0, 1].
+        """
+        if name_based == field_id:
+            return 1.0
+        text = str(column_name) if column_name is not None else ""
+        if not text.strip():
+            return 0.0
+        return min(1.0, self._name_similarity(text, self._canonical_aliases.get(field_id, [])))
+
+    def _content_is_structured_non_part_number(self, samples: List[str]) -> bool:
+        """Whether cells look like structured data, not part numbers.
+
+        Footprints (``0805``, ``SOIC-8``), dates (``2024-01-01``), phone
+        numbers (``555-123-4567``) and hex codes (``FF0000``) all satisfy the
+        permissive MPN regex; this guard suppresses the MPN content tier for
+        columns dominated by them so they are never labelled as MPNs.
+        """
+        if not samples:
+            return False
+        n = float(len(samples))
+        structured = 0
+        for value in samples:
+            text = str(value).strip()
+            if _DATE_PATTERN.match(text) or _PHONE_PATTERN.match(text):
+                structured += 1
+            elif _FOOTPRINT_PATTERN.match(text) or _HEX_PATTERN.match(text):
+                structured += 1
+        return structured / n >= 0.5
+
+    def _content_is_vendor_names(self, samples: List[str]) -> bool:
+        """Whether most cells are known vendor (manufacturer/supplier) names.
+
+        Used to give vendor columns a decisive content signal and keep
+        description prose from swallowing them.
+        """
+        if not samples:
+            return False
+        n = float(len(samples))
+        hits = 0
+        for value in samples:
+            text = str(value).lower()
+            if any(token in text for token in _VENDOR_TOKENS):
+                hits += 1
+        return hits / n >= 0.6
+
+    def _content_score(
+        self,
+        profile: Dict[str, Any],
+        samples: List[str],
+        column_name: str,
+        field_id: str
+    ) -> float:
+        """Score how well column cell values match a canonical field.
+
+        Uses the statistical profile produced by :class:`ColumnProfiler`
+        (cell data type distribution, regex pattern hits, unit presence,
+        cardinality, length and character-class statistics) to score the
+        column content independent of its header.
+
+        Returns:
+            Normalized content value-profile score in [0, 1].
+        """
+        if not samples or not profile or 'error' in profile:
+            return 0.0
+
+        type_dist = profile.get('type_distribution', {})
+        regex_hits = profile.get('regex_hits', {})
+        unit_presence = profile.get('unit_presence', {})
+        length_stats = profile.get('length_stats', {})
+        char_stats = profile.get('character_class_stats', {})
+        cardinality = profile.get('cardinality', {})
+
+        numeric_ratio = type_dist.get('numeric', 0.0)
+        text_ratio = type_dist.get('text', 0.0)
+        ref_like = regex_hits.get('ref_des_like', 0.0)
+        mpn_like = regex_hits.get('mpn_like', 0.0)
+        whitespace_pct = char_stats.get('percent_whitespace', 0.0)
+        letters_pct = char_stats.get('percent_letters', 0.0)
+        unique_ratio = cardinality.get('unique_ratio', 0.0)
+        mean_len = length_stats.get('mean', 0.0)
+
+        if field_id == "reference_designator":
+            if ref_like >= 0.6:
+                return 1.0
+            if ref_like >= 0.3:
+                return 0.5
+            return 0.0
+
+        if field_id == "quantity":
+            if numeric_ratio >= 0.9 and self._integer_ratio(samples) >= 0.9:
+                return 1.0
+            if numeric_ratio >= 0.7 and letters_pct < 5:
+                return 0.6
+            return 0.0
+
+        if field_id == "manufacturer_part_number":
+            if numeric_ratio >= 0.8:
+                return 0.0
+            if self._content_is_structured_non_part_number(samples):
+                return 0.0
+            if mpn_like >= 0.8 and unique_ratio >= 0.2 and mean_len >= 5 and ref_like < 0.3:
+                return 1.0
+            if mpn_like >= 0.6 and unique_ratio >= 0.2 and mean_len >= 5 and ref_like < 0.3:
+                return 0.85
+            if mpn_like >= 0.3 and mean_len >= 5:
+                return 0.5
+            return 0.0
+
+        if field_id == "value":
+            if unit_presence and text_ratio >= 0.6:
+                return 0.8
+            if unit_presence:
+                return 0.5
+            return 0.0
+
+        if field_id == "unit":
+            unit_ratio = self._ratio_in_set(
+                samples,
+                {"ea", "each", "pcs", "pc", "pieces", "piece", "unit", "units", "kit"}
+            )
+            if unit_ratio >= 0.6:
+                return 1.0
+            if unit_ratio >= 0.3:
+                return 0.5
+            return 0.0
+
+        if field_id in ("manufacturer", "supplier"):
+            if self._content_is_vendor_names(samples):
+                return 1.0
+            if text_ratio >= 0.9 and 4 <= mean_len <= 30 and whitespace_pct > 2:
+                return 0.9
+            if text_ratio >= 0.9 and 4 <= mean_len <= 30:
+                return 0.5
+            return 0.0
+
+        if field_id == "part_number":
+            if numeric_ratio >= 0.8:
+                return 0.0
+            if text_ratio >= 0.8 and 2 <= mean_len <= 40 and whitespace_pct < 5 and unique_ratio >= 0.2:
+                return 0.5
+            return 0.0
+
+        if field_id == "description":
+            if text_ratio >= 0.9 and self._content_is_structured_non_part_number(samples):
+                return 0.0
+            if text_ratio >= 0.9 and self._content_is_vendor_names(samples):
+                return 0.0
+            if text_ratio >= 0.9 and mean_len >= 12:
+                return 1.0
+            if text_ratio >= 0.9 and mean_len >= 8:
+                return 0.85
+            return 0.0
+
+        if field_id == "package":
+            if text_ratio >= 0.9 and 2 <= mean_len <= 40 and whitespace_pct < 10:
+                return 0.4
+            return 0.0
+
+        if field_id == "notes":
+            if text_ratio >= 0.9 and mean_len >= 15 and whitespace_pct > 8:
+                return 0.6
+            if text_ratio >= 0.9:
+                return 0.3
+            return 0.0
+
+        return 0.0
+
+    def _composite_confidence(self, name_score: float, content_score: float) -> float:
+        """Combine the header lexical score and the content value-profile score.
+
+        The two signals are blended using their weights, capped at 1.0. The
+        content value profile is never allowed to lower an otherwise strong
+        signal: when the header is empty or obfuscated, or the blend would
+        dilute the content-only evidence, the stronger of the two governs.
+        Keeping the content score as a floor makes the composite monotone in
+        both inputs and removes the float matching instability that otherwise
+        appears at the informative-header boundary.
+
+        Returns:
+            Weighted composite confidence in [0, 1].
+        """
+        blend = NAME_WEIGHT * name_score + CONTENT_WEIGHT * content_score
+        return min(1.0, max(blend, content_score))
+
+    def classify_column(self, column_name: Optional[str], values: List[Any]) -> Dict[str, Any]:
+        """Classify a column from its header and its cell values.
+
+        Combines the header's lexical similarity score with a content value
+        profile (cell data types, regex patterns, unit presence) into a
+        weighted composite confidence in [0, 1]. Columns whose header is
+        empty or obfuscated fall back to the content value profile alone.
+
+        Args:
+            column_name: The column header (may be empty or None for missing
+                headers)
+            values: Cell values for the column
+
+        Returns:
+            A dictionary with:
+                role: short role label (e.g. 'mpn' for the manufacturer part
+                    number field), or None when confidence is below the
+                    0.85 classification threshold
+                role_id: canonical field id from ``STANDARD_HEADERS``
+                confidence: weighted composite confidence in [0, 1]
+                name_score: header lexical score in [0, 1]
+                content_score: content value-profile score in [0, 1]
+        """
+        values = list(values) if values is not None else []
+        name = str(column_name) if column_name is not None else ""
+        samples = self._sample_values(values)
+        profile = ColumnProfiler().profile_column(name, values)
+        name_based = self.normalize_column_name(name) if name.strip() else None
+
+        best = None
+        for field_id in STANDARD_HEADERS:
+            name_score = self._name_score(name, field_id, name_based)
+            content_score = self._content_score(profile, samples, name, field_id)
+            confidence = self._composite_confidence(name_score, content_score)
+            if best is None or confidence > best["confidence"]:
+                best = {
+                    "role_id": field_id,
+                    "confidence": confidence,
+                    "name_score": name_score,
+                    "content_score": content_score,
+                }
+
+        result = dict(best)
+        if best["confidence"] >= CLASSIFICATION_THRESHOLD:
+            result["role"] = _ROLE_LABELS.get(best["role_id"], best["role_id"])
+        else:
+            result["role"] = None
+        return result
+
+    def classify_columns(self, raw_rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """Classify every column in a table of raw rows.
+
+        Args:
+            raw_rows: List of dictionaries representing rows
+
+        Returns:
+            Mapping of column name to its classification result from
+            :meth:`classify_column`.
+        """
+        if not raw_rows:
+            return {}
+
+        columns = list(raw_rows[0].keys())
+        for row in raw_rows[1:]:
+            for col in row.keys():
+                if col not in columns:
+                    columns.append(col)
+
+        results = {}
+        for col in columns:
+            values = [row.get(col) for row in raw_rows]
+            results[col] = self.classify_column(col, values)
+        return results
 
     def infer_column_mapping(self, raw_rows: List[Dict[str, Any]]) -> Dict[str, Optional[str]]:
         """Infer a column mapping from raw rows to standard headers."""
@@ -298,6 +619,15 @@ class BomNormalizer:
                 candidates[col] = (best_field, best_score)
             else:
                 candidates[col] = (None, best_score)
+
+            # Fall back to content value profiling when the header alone
+            # could not identify a field (empty, cryptic or obfuscated).
+            if best_field is None:
+                classification = self.classify_column(str(col), values_by_column.get(col, []))
+                if classification["role"] is not None:
+                    best_field = classification["role_id"]
+                    best_score = max(best_score, classification["confidence"])
+                    candidates[col] = (best_field, best_score)
 
         # Resolve conflicts: keep best scoring column for each field
         assigned: Dict[str, str] = {}
@@ -449,8 +779,8 @@ class BomNormalizer:
                 continue
 
             # Check if it's already a range (e.g., "R1-R5")
-            if '-' in part and not part.startswith('-'):
-                range_parts = part.split('-', 1)
+            if ('-' in part or '..' in part) and not part.startswith('-'):
+                range_parts = re.split(r'\s*(?:-|\.\.)\s*', part, maxsplit=1)
                 if len(range_parts) == 2:
                     start = range_parts[0].strip()
                     end = range_parts[1].strip()
@@ -461,9 +791,16 @@ class BomNormalizer:
                         start_prefix, start_num = start_match.groups()
                         end_prefix, end_num = end_match.groups()
                         if start_prefix == end_prefix:
-                            # Expand the range to individual designators
-                            for num in range(int(start_num), int(end_num) + 1):
-                                parseable_designators.append((start_prefix, num))
+                            start_num = int(start_num)
+                            end_num = int(end_num)
+
+                            if start_num <= end_num:
+                                # Expand the range to individual designators
+                                for num in range(start_num, end_num + 1):
+                                    parseable_designators.append((start_prefix, num))
+                            else:
+                                # Invalid reversed range, keep as-is
+                                unparseable.append(part)
                         else:
                             # Different prefixes, treat as separate
                             parseable_designators.append((start_prefix, int(start_num)))
