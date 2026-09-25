@@ -22,6 +22,8 @@ class UnitNormalizer:
         (r'([\d.]+)\s*(V|mV|kV|MV)', 'voltage'),
         # Current: A, mA, uA, µA, nA, pA
         (r'([\d.]+)\s*(A|mA|uA|µA|nA|pA)', 'current'),
+        # Inductance: H, mH, uH, µH, nH, pH
+        (r'([\d.]+)\s*(pH|nH|uH|µH|mH|H)', 'inductance'),
         # Frequency: Hz, kHz, MHz, GHz
         (r'([\d.]+)\s*(Hz|kHz|MHz|GHz)', 'frequency'),
         # Power: W, mW, kW, MW
@@ -173,7 +175,8 @@ class UnitNormalizer:
             'p': 1e-12,  # pico
             'n': 1e-9,   # nano
             'u': 1e-6,   # micro
-            'µ': 1e-6,   # micro (unicode)
+            'µ': 1e-6,   # micro (micro sign U+00B5)
+            'μ': 1e-6,   # micro (greek mu U+03BC)
             'm': 1e-3,   # milli
             'k': 1e3,    # kilo
             'M': 1e6,    # mega
@@ -191,19 +194,29 @@ class UnitNormalizer:
         # Values like "100k" are often resistors (kΩ)
         # Values like "1.5u" could be capacitance (uF) or current (uA)
         
+        orig_lower = original_str.lower()
+        is_inductor = any(term in orig_lower for term in ['ind', 'coil', 'choke', 'ferrite', 'l'])
+        # Avoid matching 'l' too broadly, but usually components have "L1" as ref_des
+        # Let's stick to 'ind', 'coil', 'choke'
+        is_inductor = any(term in orig_lower for term in ['ind', 'coil', 'choke', 'henry'])
+        
         # Heuristic: if value is small (< 1 with prefix), likely capacitance
         # If value is large (> 100 with prefix), likely resistance
-        if unit_str_lower in ['p', 'n', 'u', 'µ']:
-            # Likely capacitance
-            normalized_value = num_value * multiplier  # Convert to Farads
-            return normalized_value, 'F'
-        elif unit_str_lower in ['k', 'M']:
+        if unit_str_lower in ['p', 'n', 'u', 'µ', 'μ', 'm']:
+            if is_inductor:
+                normalized_value = num_value * multiplier
+                return normalized_value, 'H'
+            if unit_str_lower != 'm':
+                # Likely capacitance
+                normalized_value = num_value * multiplier  # Convert to Farads
+                return normalized_value, 'F'
+        if unit_str_lower in ['k', 'M']:
             # Likely resistance (kΩ, MΩ)
             normalized_value = num_value * multiplier  # Convert to Ohms
             return normalized_value, 'ohm'
-        else:
-            # Default: assume base unit (no conversion)
-            return num_value, None
+        
+        # Default: assume base unit (no conversion)
+        return num_value, None
     
     def _normalize_with_pint(
         self, num_value: float, unit_str: str, unit_type: str
@@ -225,6 +238,9 @@ class UnitNormalizer:
                 # Capacitance - Pint uses 'farad' (lowercase)
                 'pF': 'picofarad', 'nF': 'nanofarad', 'uF': 'microfarad',
                 'µF': 'microfarad', 'mF': 'millifarad', 'F': 'farad',
+                # Inductance - Pint uses 'henry'
+                'pH': 'picohenry', 'nH': 'nanohenry', 'uH': 'microhenry',
+                'µH': 'microhenry', 'mH': 'millihenry', 'H': 'henry',
                 # Resistance - Pint uses 'ohm'
                 'R': 'ohm', 'kR': 'kiloohm', 'MR': 'megaohm',
                 'mΩ': 'milliohm', 'Ω': 'ohm', 'kΩ': 'kiloohm', 'MΩ': 'megaohm',

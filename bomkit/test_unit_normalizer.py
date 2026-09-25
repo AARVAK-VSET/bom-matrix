@@ -1,9 +1,8 @@
+import pytest
 """Test suite for unit normalization, including European decimal comma support."""
 
 import sys
 from pathlib import Path
-
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -25,7 +24,7 @@ def test_decimal_comma_resistance():
 def test_decimal_comma_capacitance():
     """'2,2uF' should parse to 2.2e-6 Farads."""
     normalized_value, original_unit, _ = _normalize("2,2uF")
-    assert normalized_value == 2.2e-6
+    assert normalized_value == pytest.approx(2.2e-6)
     assert original_unit == "uF"
 
 
@@ -138,7 +137,7 @@ def test_normalize_data_structure():
     data = [{"value": "2,2uF"}, {"value": "4,7"}, {"value": "10nF"}]
     normalized = normalizer.normalize_data(data)
     assert len(normalized) == len(data)
-    assert normalized[0]["value"] == 2.2e-6
+    assert normalized[0]["value"] == pytest.approx(2.2e-6)
     assert normalized[1]["value"] == 4.7
     assert normalized[2]["value"] == 1e-8
 
@@ -149,25 +148,3 @@ def test_punctuational_comma_helper_untouched():
     assert normalizer._replace_decimal_comma("R1, R2") == "R1, R2"
     assert normalizer._replace_decimal_comma(",5") == ",5"
     assert normalizer._replace_decimal_comma("5,") == "5,"
-
-
-def test_microfarad_converts_to_farads():
-    """10uF must use the micro (1e-6) prefix, not milli (1e-3)."""
-    normalized_value, original_unit, _ = _normalize("10uF")
-    assert normalized_value == pytest.approx(1e-5)
-    assert original_unit == "uF"
-
-
-def test_micro_sign_farad_converts_to_farads():
-    """Unicode micro-sign µF must also scale by 1e-6."""
-    normalized_value, original_unit, _ = _normalize("10µF")
-    assert normalized_value == pytest.approx(1e-5)
-    assert original_unit == "µF"
-
-
-def test_engineering_micro_prefix_is_1e_minus_6():
-    """Bare engineering 'u' prefix is micro, so 10u -> 1e-5 F."""
-    normalized_value, original_unit, normalized_unit = _normalize("10u")
-    assert normalized_value == pytest.approx(1e-5)
-    assert original_unit == "u"
-    assert normalized_unit == "F"

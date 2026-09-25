@@ -184,6 +184,7 @@ class ColumnProfiler:
         ref_des_matches = 0
         
         for value in values:
+            value=str(value).strip()
             # Check MPN patterns
             for pattern in self.MPN_PATTERNS:
                 if re.match(pattern, value):
@@ -462,6 +463,26 @@ class ColumnProfiler:
             similarities.append(similarity)
         
         return sum(similarities) / len(similarities) if similarities else 0.0
+
+    def profile(self, raw_rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """Profile all columns in a list of row dictionaries."""
+        if not raw_rows:
+            return {}
+        columns = list(raw_rows[0].keys())
+        for row in raw_rows[1:]:
+            for col in row.keys():
+                if col not in columns:
+                    columns.append(col)
+        profiles = {}
+        for col in columns:
+            values = [row.get(col) for row in raw_rows]
+            profiles[col] = self.profile_column(str(col), values)
+        return profiles
+
+    def profile_dataframe(self, raw_rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """Alias for profile() to support dataframe-like row dictionary lists."""
+        return self.profile(raw_rows)
+
 
 
 

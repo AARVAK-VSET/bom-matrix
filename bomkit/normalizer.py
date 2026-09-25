@@ -305,6 +305,19 @@ class BomNormalizer:
             if any(key in col_lower for key in ["revision", "rev"]):
                 score -= 0.6
 
+        authoritative_abbreviations = {
+            "qty": "quantity",
+            "desc": "description",
+            "mfr pn": "manufacturer_part_number",
+            "mpn": "manufacturer_part_number",
+            "ref": "reference_designator",
+            "value": "value",
+            "designator": "reference_designator"
+        }
+        normalized_col = self._normalize_header_text(column_name)
+        if authoritative_abbreviations.get(normalized_col) == field_id:
+            score = max(score, 0.95)
+
         return score
 
     def _name_score(self, column_name: str, field_id: str, name_based: Optional[str]) -> float:
@@ -766,8 +779,8 @@ class BomNormalizer:
                 continue
 
             # Check if it's already a range (e.g., "R1-R5")
-            if '-' in part and not part.startswith('-'):
-                range_parts = part.split('-', 1)
+            if ('-' in part or '..' in part) and not part.startswith('-'):
+                range_parts = re.split(r'\s*(?:-|\.\.)\s*', part, maxsplit=1)
                 if len(range_parts) == 2:
                     start = range_parts[0].strip()
                     end = range_parts[1].strip()
@@ -778,9 +791,16 @@ class BomNormalizer:
                         start_prefix, start_num = start_match.groups()
                         end_prefix, end_num = end_match.groups()
                         if start_prefix == end_prefix:
-                            # Expand the range to individual designators
-                            for num in range(int(start_num), int(end_num) + 1):
-                                parseable_designators.append((start_prefix, num))
+                            start_num = int(start_num)
+                            end_num = int(end_num)
+
+                            if start_num <= end_num:
+                                # Expand the range to individual designators
+                                for num in range(start_num, end_num + 1):
+                                    parseable_designators.append((start_prefix, num))
+                            else:
+                                # Invalid reversed range, keep as-is
+                                unparseable.append(part)
                         else:
                             # Different prefixes, treat as separate
                             parseable_designators.append((start_prefix, int(start_num)))
