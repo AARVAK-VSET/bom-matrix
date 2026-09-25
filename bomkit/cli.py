@@ -16,12 +16,7 @@ def main():
         prog="bom-matrix",
         description="BOM-Matrix: High-performance Bill of Materials parsing and normalization engine."
     )
-    parser.add_argument("file", nargs="?", help="Path to BOM file (CSV/Excel) to parse or inspect")
-    parser.add_argument("--profile", action="store_true", help="Profile columns and detect standard headers")
-    parser.add_argument("--normalize", action="store_true", help="Normalize columns and units")
-    parser.add_argument("--output", "-o", help="Output path for normalized BOM (JSON or CSV)")
-    parser.add_argument("--version", "-v", action="version", version="bom-matrix 1.0.0")
-
+    
     args = parser.parse_args()
 
     if not args.file:
